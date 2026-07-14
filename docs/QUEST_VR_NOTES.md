@@ -14,6 +14,7 @@ The prototype currently contains:
 - side-by-side eye rendering inside GLideN64;
 - a per-eye clip-space transform for world triangles, calculated as
   `N64 projection * VR view * inverse(N64 projection)`;
+- runtime eye positions and asymmetric OpenXR FOV terms applied to perspective world projections;
 - monoscopic duplication of rectangle/HUD draws into both eye viewports;
 - expanded GLideN64 CPU clipping while stereo is active;
 - an OpenXR Touch action-set fallback merged with the normal player-one controller state;
@@ -64,6 +65,7 @@ The module uses the loader's Prefab CMake target and implements:
 - event-driven session begin/end and instance-loss handling;
 - `xrWaitFrame`, `xrBeginFrame`, `xrLocateViews`, image acquire/wait/release, and `xrEndFrame`;
 - orientation and center-eye position publication using predicted display time;
+- per-eye tracked positions and FOV publication for projection-aligned stereo;
 - recenter propagation on OpenXR reference-space changes;
 - explicit recenter from the in-game drawer or a paired keyboard's F12 key;
 - Touch controller action sync, with both thumbsticks clicked together as an in-headset recenter;
@@ -108,7 +110,7 @@ Developer settings are stored in Android shared preferences named `quest_vr`. De
 | --- | ---: | --- |
 | `enabled` | `true` | Enables OpenXR on devices advertising VR head tracking |
 | `stereo_enabled` | `true` | Enables GLideN64 side-by-side geometry |
-| `ipd_meters` | `0.064` | Eye separation |
+| `ipd_meters` | `0.064` | Scales the runtime eye baseline to the requested stereo separation |
 | `world_units_per_meter` | `64.0` | Maps tracked metres to N64 view units |
 | `rotation_strength` | `1.0` | Scales recentered headset rotation |
 | `position_enabled` | `false` | Enables positional head translation |
@@ -122,6 +124,7 @@ Developer settings are stored in Android shared preferences named `quest_vr`. De
 | `hud_scale` | `1.0` | Reserved for a composited HUD layer |
 | `hud_mode` | `monoscopic_overlay` | Documents the current zero-disparity HUD policy |
 | `culling_expansion` | `1.25` | Reserved for a graduated clipping policy |
+| `use_openxr_fov` | `true` | Replaces perspective angular terms with each runtime eye FOV |
 | `touch_controller_enabled` | `true` | Merges OpenXR Touch input into N64 player one |
 | `debug_logging` | `false` | Periodically logs pose and stereo draw counters |
 
@@ -160,8 +163,8 @@ the OpenXR module is intentionally restricted to `arm64-v8a` for Quest.
 ## Known limitations and risks
 
 - No on-device validation yet; axis signs, eye order, and world scale may require immediate tuning.
-- OpenXR per-eye FOV is not yet used to replace the game's projection. Both eyes retain the active
-  N64 projection and differ through eye/view transforms.
+- OpenXR FOV correction only applies to matrices recognized as perspective projections. Complex
+  game-specific projection tricks may be misclassified until the Mario Kart profile is added.
 - Game-side culling can still omit scenery exposed by large head turns or leaning.
 - Full-screen framebuffer texture effects may sample the complete side-by-side buffer and need
   eye-aware UV cropping.

@@ -33,9 +33,16 @@ struct Swapchain {
 using SetVrEnabledFn = void (*)(int enabled);
 using SetVrPoseFn = void (*)(float qx, float qy, float qz, float qw,
                              float px, float py, float pz, int64_t timestamp);
+using SetVrViewsFn = void (*)(float leftPx, float leftPy, float leftPz,
+                              float leftAngleLeft, float leftAngleRight,
+                              float leftAngleUp, float leftAngleDown,
+                              float rightPx, float rightPy, float rightPz,
+                              float rightAngleLeft, float rightAngleRight,
+                              float rightAngleUp, float rightAngleDown);
 using ConfigureVrFn = void (*)(int stereoEnabled, float ipdMeters, float worldUnitsPerMeter,
                                float rotationStrength, int positionEnabled, float maxTranslationMeters,
-                               float cameraOffsetX, float cameraOffsetY, float cameraOffsetZ);
+                               float cameraOffsetX, float cameraOffsetY, float cameraOffsetZ,
+                               int useOpenXrFov);
 using RecenterVrFn = void (*)();
 using GetVrStatsFn = void (*)(uint32_t* geometryDraws, uint32_t* rectangleDraws,
                               uint32_t* eyeDraws, uint32_t* poseGeneration);
@@ -90,6 +97,7 @@ struct State {
 
     SetVrEnabledFn setVrEnabled{nullptr};
     SetVrPoseFn setVrPose{nullptr};
+    SetVrViewsFn setVrViews{nullptr};
     ConfigureVrFn configureVr{nullptr};
     RecenterVrFn recenterVr{nullptr};
     GetVrStatsFn getVrStats{nullptr};
@@ -109,6 +117,7 @@ struct State {
     float configurationCameraOffsetX{0.0f};
     float configurationCameraOffsetY{0.0f};
     float configurationCameraOffsetZ{0.0f};
+    bool configurationUseOpenXrFov{true};
     bool touchControllerEnabled{true};
     bool debugLogging{false};
     uint32_t submittedFrameCount{0};
@@ -336,6 +345,7 @@ void resolveRendererBridge() {
     void* symbolScope = videoPlugin != nullptr ? videoPlugin : RTLD_DEFAULT;
     g.setVrEnabled = reinterpret_cast<SetVrEnabledFn>(dlsym(symbolScope, "M64PQuestVrSetEnabled"));
     g.setVrPose = reinterpret_cast<SetVrPoseFn>(dlsym(symbolScope, "M64PQuestVrSetPose"));
+    g.setVrViews = reinterpret_cast<SetVrViewsFn>(dlsym(symbolScope, "M64PQuestVrSetViews"));
     g.configureVr = reinterpret_cast<ConfigureVrFn>(dlsym(symbolScope, "M64PQuestVrConfigure"));
     g.recenterVr = reinterpret_cast<RecenterVrFn>(dlsym(symbolScope, "M64PQuestVrRecenter"));
     g.getVrStats = reinterpret_cast<GetVrStatsFn>(dlsym(symbolScope, "M64PQuestVrGetStats"));
@@ -347,7 +357,7 @@ void resolveRendererBridge() {
                           g.configurationWorldUnitsPerMeter, g.configurationRotationStrength,
                           g.configurationPositionEnabled ? 1 : 0, g.configurationMaxTranslationMeters,
                           g.configurationCameraOffsetX, g.configurationCameraOffsetY,
-                          g.configurationCameraOffsetZ);
+                          g.configurationCameraOffsetZ, g.configurationUseOpenXrFov ? 1 : 0);
         }
         g.setVrEnabled(1);
         g.stereoSourceActive = g.stereoRequested && g.configurationStereoEnabled;
@@ -505,6 +515,15 @@ void publishHeadPose(XrTime displayTime, uint32_t viewCount) {
 
     g.setVrPose(pose.orientation.x, pose.orientation.y, pose.orientation.z, pose.orientation.w,
                 position.x, position.y, position.z, static_cast<int64_t>(displayTime));
+    if (g.setVrViews != nullptr && viewCount >= 2) {
+        const XrView& left = g.views[0];
+        const XrView& right = g.views[1];
+        g.setVrViews(
+            left.pose.position.x, left.pose.position.y, left.pose.position.z,
+            left.fov.angleLeft, left.fov.angleRight, left.fov.angleUp, left.fov.angleDown,
+            right.pose.position.x, right.pose.position.y, right.pose.position.z,
+            right.fov.angleLeft, right.fov.angleRight, right.fov.angleUp, right.fov.angleDown);
+    }
 
     ++g.submittedFrameCount;
     if (g.debugLogging && g.submittedFrameCount % 300 == 0) {
@@ -515,11 +534,23 @@ void publishHeadPose(XrTime displayTime, uint32_t viewCount) {
         if (g.getVrStats != nullptr) {
             g.getVrStats(&geometryDraws, &rectangleDraws, &eyeDraws, &poseGeneration);
         }
+        float runtimeIpd = 0.0f;
+        if (viewCount >= 2) {
+            const XrVector3f delta{
+                g.views[1].pose.position.x - g.views[0].pose.position.x,
+                g.views[1].pose.position.y - g.views[0].pose.position.y,
+                g.views[1].pose.position.z - g.views[0].pose.position.z,
+            };
+            runtimeIpd = std::sqrt(delta.x * delta.x + delta.y * delta.y + delta.z * delta.z);
+        }
         LOGI("pose q=[%.3f %.3f %.3f %.3f] p=[%.3f %.3f %.3f], "
+             "runtimeIpd=%.4f fovL=[%.3f %.3f %.3f %.3f], "
              "draws geometry=%u rect=%u eyes=%u poseGeneration=%u",
              pose.orientation.x, pose.orientation.y, pose.orientation.z, pose.orientation.w,
-             position.x, position.y, position.z, geometryDraws, rectangleDraws, eyeDraws,
-             poseGeneration);
+             position.x, position.y, position.z, runtimeIpd,
+             g.views[0].fov.angleLeft, g.views[0].fov.angleRight,
+             g.views[0].fov.angleUp, g.views[0].fov.angleDown,
+             geometryDraws, rectangleDraws, eyeDraws, poseGeneration);
     }
 }
 
@@ -894,7 +925,8 @@ Java_paulscode_android_mupen64plusae_questvr_QuestVrBridge_nativeConfigure(
         JNIEnv*, jclass, jboolean stereoEnabled, jfloat ipdMeters,
         jfloat worldUnitsPerMeter, jfloat rotationStrength, jboolean positionEnabled,
         jfloat maxTranslationMeters, jfloat cameraOffsetX, jfloat cameraOffsetY,
-        jfloat cameraOffsetZ, jboolean touchControllerEnabled, jboolean debugLogging) {
+        jfloat cameraOffsetZ, jboolean useOpenXrFov, jboolean touchControllerEnabled,
+        jboolean debugLogging) {
     g.configurationStereoEnabled = stereoEnabled == JNI_TRUE;
     g.configurationIpdMeters = ipdMeters;
     g.configurationWorldUnitsPerMeter = worldUnitsPerMeter;
@@ -904,6 +936,7 @@ Java_paulscode_android_mupen64plusae_questvr_QuestVrBridge_nativeConfigure(
     g.configurationCameraOffsetX = cameraOffsetX;
     g.configurationCameraOffsetY = cameraOffsetY;
     g.configurationCameraOffsetZ = cameraOffsetZ;
+    g.configurationUseOpenXrFov = useOpenXrFov == JNI_TRUE;
     g.touchControllerEnabled = touchControllerEnabled == JNI_TRUE;
     g.debugLogging = debugLogging == JNI_TRUE;
     if (g.configureVr != nullptr) {
@@ -911,7 +944,7 @@ Java_paulscode_android_mupen64plusae_questvr_QuestVrBridge_nativeConfigure(
                       g.configurationWorldUnitsPerMeter, g.configurationRotationStrength,
                       g.configurationPositionEnabled ? 1 : 0, g.configurationMaxTranslationMeters,
                       g.configurationCameraOffsetX, g.configurationCameraOffsetY,
-                      g.configurationCameraOffsetZ);
+                      g.configurationCameraOffsetZ, g.configurationUseOpenXrFov ? 1 : 0);
     }
 }
 

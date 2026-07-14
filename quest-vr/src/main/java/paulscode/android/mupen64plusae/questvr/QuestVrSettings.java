@@ -32,6 +32,7 @@ public final class QuestVrSettings {
                 preferences.getFloat("hud_scale", 1.0f),
                 preferences.getString("hud_mode", "monoscopic_overlay"),
                 preferences.getFloat("culling_expansion", 1.25f),
+                preferences.getBoolean("use_openxr_fov", true),
                 preferences.getBoolean("touch_controller_enabled", true),
                 preferences.getBoolean("debug_logging", false));
     }
@@ -53,6 +54,7 @@ public final class QuestVrSettings {
         public final float hudScale;
         public final String hudMode;
         public final float cullingExpansion;
+        public final boolean useOpenXrFov;
         public final boolean touchControllerEnabled;
         public final boolean debugLogging;
 
@@ -61,7 +63,7 @@ public final class QuestVrSettings {
                 float maxTranslationMeters, float cameraOffsetXMeters, float cameraOffsetYMeters,
                 float cameraOffsetZMeters, float nearPlane, float farPlane, float hudDepthMeters,
                 float hudScale, String hudMode, float cullingExpansion,
-                boolean touchControllerEnabled, boolean debugLogging) {
+                boolean useOpenXrFov, boolean touchControllerEnabled, boolean debugLogging) {
             this.enabled = enabled;
             this.stereoEnabled = stereoEnabled;
             this.ipdMeters = ipdMeters;
@@ -78,6 +80,7 @@ public final class QuestVrSettings {
             this.hudScale = hudScale;
             this.hudMode = hudMode;
             this.cullingExpansion = cullingExpansion;
+            this.useOpenXrFov = useOpenXrFov;
             this.touchControllerEnabled = touchControllerEnabled;
             this.debugLogging = debugLogging;
         }

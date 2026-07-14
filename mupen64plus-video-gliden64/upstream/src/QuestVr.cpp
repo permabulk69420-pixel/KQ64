@@ -24,6 +24,16 @@ struct AtomicPose {
 	std::atomic<float> pz{0.0f};
 };
 
+struct AtomicView {
+	std::atomic<float> px{0.0f};
+	std::atomic<float> py{0.0f};
+	std::atomic<float> pz{0.0f};
+	std::atomic<float> angleLeft{-0.8f};
+	std::atomic<float> angleRight{0.8f};
+	std::atomic<float> angleUp{0.8f};
+	std::atomic<float> angleDown{-0.8f};
+};
+
 struct Quaternion {
 	float x;
 	float y;
@@ -53,6 +63,8 @@ struct RectState {
 std::atomic<bool> s_enabled{false};
 std::atomic<bool> s_stereoEnabled{true};
 std::atomic<bool> s_positionEnabled{false};
+std::atomic<bool> s_useOpenXrFov{true};
+std::atomic<bool> s_haveRuntimeViews{false};
 std::atomic<bool> s_haveRecenterPose{false};
 std::atomic<bool> s_recenterRequested{true};
 std::atomic<float> s_ipdMeters{0.064f};
@@ -70,6 +82,7 @@ std::atomic<unsigned int> s_eyeDraws{0};
 
 AtomicPose s_pose;
 AtomicPose s_recenterPose;
+std::array<AtomicView, 2> s_runtimeViews;
 RectState s_viewport;
 RectState s_scissor;
 bool s_scissorEnabled{false};
@@ -153,6 +166,13 @@ Vector3 loadPosition(const AtomicPose& pose)
 	return {pose.px.load(std::memory_order_relaxed),
 		pose.py.load(std::memory_order_relaxed),
 		pose.pz.load(std::memory_order_relaxed)};
+}
+
+Vector3 loadViewPosition(const AtomicView& view)
+{
+	return {view.px.load(std::memory_order_relaxed),
+		view.py.load(std::memory_order_relaxed),
+		view.pz.load(std::memory_order_relaxed)};
 }
 
 void storePose(AtomicPose& destination, const Quaternion& orientation, const Vector3& position)
@@ -252,6 +272,32 @@ void quaternionMatrix(const Quaternion& q, float* matrix)
 	matrix[10] = 1.0f - 2.0f * (xx + yy);
 }
 
+void applyRuntimeProjection(unsigned int eye, float* projection)
+{
+	if (!s_useOpenXrFov.load(std::memory_order_relaxed) ||
+		!s_haveRuntimeViews.load(std::memory_order_acquire))
+		return;
+
+	// GLideN64 projection matrices use OpenGL column-major layout. Only replace the angular
+	// terms for perspective world draws; retain the game's depth mapping and leave orthographic
+	// HUD/background projections alone.
+	if (std::abs(projection[11]) < 0.5f || std::abs(projection[15]) > 0.001f)
+		return;
+	const AtomicView& view = s_runtimeViews[std::min(eye, 1U)];
+	const float tanLeft = std::tan(view.angleLeft.load(std::memory_order_relaxed));
+	const float tanRight = std::tan(view.angleRight.load(std::memory_order_relaxed));
+	const float tanUp = std::tan(view.angleUp.load(std::memory_order_relaxed));
+	const float tanDown = std::tan(view.angleDown.load(std::memory_order_relaxed));
+	const float width = tanRight - tanLeft;
+	const float height = tanUp - tanDown;
+	if (!std::isfinite(width) || !std::isfinite(height) || width < 0.01f || height < 0.01f)
+		return;
+	projection[0] = 2.0f / width;
+	projection[5] = 2.0f / height;
+	projection[8] = (tanRight + tanLeft) / width;
+	projection[9] = (tanUp + tanDown) / height;
+}
+
 void buildEyeTransform(unsigned int eye, const float* projection, float* destination)
 {
 	const Quaternion recenterOrientation = loadOrientation(s_recenterPose);
@@ -279,18 +325,39 @@ void buildEyeTransform(unsigned int eye, const float* projection, float* destina
 		}
 	}
 
-	const float eyeSign = eye == 0 ? -0.5f : 0.5f;
+	Vector3 eyeOffset{0.0f, 0.0f, 0.0f};
+	if (s_haveRuntimeViews.load(std::memory_order_acquire)) {
+		const Vector3 currentCenter = loadPosition(s_pose);
+		const Vector3 trackedEye = loadViewPosition(s_runtimeViews[std::min(eye, 1U)]);
+		const Vector3 trackedLeft = loadViewPosition(s_runtimeViews[0]);
+		const Vector3 trackedRight = loadViewPosition(s_runtimeViews[1]);
+		const float measuredIpd = std::sqrt(
+			(trackedRight.x - trackedLeft.x) * (trackedRight.x - trackedLeft.x) +
+			(trackedRight.y - trackedLeft.y) * (trackedRight.y - trackedLeft.y) +
+			(trackedRight.z - trackedLeft.z) * (trackedRight.z - trackedLeft.z));
+		const float eyeScale = measuredIpd > 0.001f
+			? s_ipdMeters.load(std::memory_order_relaxed) / measuredIpd : 1.0f;
+		eyeOffset = rotate(conjugate(recenterOrientation), {
+			(trackedEye.x - currentCenter.x) * eyeScale,
+			(trackedEye.y - currentCenter.y) * eyeScale,
+			(trackedEye.z - currentCenter.z) * eyeScale,
+		});
+	} else {
+		const float eyeSign = eye == 0 ? -0.5f : 0.5f;
+		eyeOffset = rotate(headOrientation,
+			{eyeSign * s_ipdMeters.load(std::memory_order_relaxed), 0.0f, 0.0f});
+	}
 	const Vector3 localCameraOffset{
-		s_cameraOffsetX.load(std::memory_order_relaxed) + eyeSign * s_ipdMeters.load(std::memory_order_relaxed),
+		s_cameraOffsetX.load(std::memory_order_relaxed),
 		s_cameraOffsetY.load(std::memory_order_relaxed),
 		s_cameraOffsetZ.load(std::memory_order_relaxed),
 	};
 	const Vector3 rotatedCameraOffset = rotate(headOrientation, localCameraOffset);
 	const float worldScale = std::max(0.001f, s_worldUnitsPerMeter.load(std::memory_order_relaxed));
 	const Vector3 cameraPosition{
-		(headPosition.x + rotatedCameraOffset.x) * worldScale,
-		(headPosition.y + rotatedCameraOffset.y) * worldScale,
-		(headPosition.z + rotatedCameraOffset.z) * worldScale,
+		(headPosition.x + eyeOffset.x + rotatedCameraOffset.x) * worldScale,
+		(headPosition.y + eyeOffset.y + rotatedCameraOffset.y) * worldScale,
+		(headPosition.z + eyeOffset.z + rotatedCameraOffset.z) * worldScale,
 	};
 
 	const Quaternion inverseHeadOrientation = conjugate(headOrientation);
@@ -309,8 +376,11 @@ void buildEyeTransform(unsigned int eye, const float* projection, float* destina
 		destination[12] = eye == 0 ? 0.004f : -0.004f;
 		return;
 	}
+	std::array<float, 16> eyeProjection{};
+	std::copy(projection, projection + 16, eyeProjection.begin());
+	applyRuntimeProjection(eye, eyeProjection.data());
 	std::array<float, 16> projectionView{};
-	multiplyMatrices(projection, view.data(), projectionView.data());
+	multiplyMatrices(eyeProjection.data(), view.data(), projectionView.data());
 	multiplyMatrices(projectionView.data(), inverseProjection.data(), destination);
 }
 
@@ -508,9 +578,34 @@ extern "C" QUEST_VR_EXPORT void M64PQuestVrSetPose(float qx, float qy, float qz,
 	s_poseGeneration.fetch_add(1, std::memory_order_release);
 }
 
+extern "C" QUEST_VR_EXPORT void M64PQuestVrSetViews(
+	float leftPx, float leftPy, float leftPz,
+	float leftAngleLeft, float leftAngleRight, float leftAngleUp, float leftAngleDown,
+	float rightPx, float rightPy, float rightPz,
+	float rightAngleLeft, float rightAngleRight, float rightAngleUp, float rightAngleDown)
+{
+	const std::array<std::array<float, 7>, 2> views{{
+		{{leftPx, leftPy, leftPz, leftAngleLeft, leftAngleRight, leftAngleUp, leftAngleDown}},
+		{{rightPx, rightPy, rightPz, rightAngleLeft, rightAngleRight, rightAngleUp, rightAngleDown}},
+	}};
+	for (unsigned int eye = 0; eye < 2; ++eye) {
+		AtomicView& destination = s_runtimeViews[eye];
+		destination.px.store(views[eye][0], std::memory_order_relaxed);
+		destination.py.store(views[eye][1], std::memory_order_relaxed);
+		destination.pz.store(views[eye][2], std::memory_order_relaxed);
+		destination.angleLeft.store(views[eye][3], std::memory_order_relaxed);
+		destination.angleRight.store(views[eye][4], std::memory_order_relaxed);
+		destination.angleUp.store(views[eye][5], std::memory_order_relaxed);
+		destination.angleDown.store(views[eye][6], std::memory_order_relaxed);
+	}
+	s_haveRuntimeViews.store(true, std::memory_order_release);
+	s_poseGeneration.fetch_add(1, std::memory_order_release);
+}
+
 extern "C" QUEST_VR_EXPORT void M64PQuestVrConfigure(int stereoEnabled, float ipdMeters,
 	float worldUnitsPerMeter, float rotationStrength, int positionEnabled,
-	float maxTranslationMeters, float cameraOffsetX, float cameraOffsetY, float cameraOffsetZ)
+	float maxTranslationMeters, float cameraOffsetX, float cameraOffsetY, float cameraOffsetZ,
+	int useOpenXrFov)
 {
 	s_stereoEnabled.store(stereoEnabled != 0, std::memory_order_relaxed);
 	s_ipdMeters.store(std::max(0.0f, ipdMeters), std::memory_order_relaxed);
@@ -521,6 +616,7 @@ extern "C" QUEST_VR_EXPORT void M64PQuestVrConfigure(int stereoEnabled, float ip
 	s_cameraOffsetX.store(cameraOffsetX, std::memory_order_relaxed);
 	s_cameraOffsetY.store(cameraOffsetY, std::memory_order_relaxed);
 	s_cameraOffsetZ.store(cameraOffsetZ, std::memory_order_relaxed);
+	s_useOpenXrFov.store(useOpenXrFov != 0, std::memory_order_relaxed);
 	s_configGeneration.fetch_add(1, std::memory_order_release);
 }
 
