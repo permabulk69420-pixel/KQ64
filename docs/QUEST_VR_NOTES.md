@@ -64,6 +64,7 @@ The module uses the loader's Prefab CMake target and implements:
 - `xrWaitFrame`, `xrBeginFrame`, `xrLocateViews`, image acquire/wait/release, and `xrEndFrame`;
 - orientation and center-eye position publication using predicted display time;
 - recenter propagation on OpenXR reference-space changes;
+- explicit recenter from the in-game drawer or a paired keyboard's F12 key;
 - clean resource destruction before the EGL context is destroyed.
 
 The OpenXR layer currently samples the emulator's external-OES texture into each eye swapchain. A
@@ -119,7 +120,7 @@ Developer settings are stored in Android shared preferences named `quest_vr`. De
 | `hud_scale` | `1.0` | Reserved for a composited HUD layer |
 | `hud_mode` | `monoscopic_overlay` | Documents the current zero-disparity HUD policy |
 | `culling_expansion` | `1.25` | Reserved for a graduated clipping policy |
-| `debug_logging` | `false` | Reserved for high-frequency diagnostics |
+| `debug_logging` | `false` | Periodically logs pose and stereo draw counters |
 
 Positional tracking is intentionally off by default for the first Quest build. Orientation and eye
 separation are active. The renderer automatically captures the first valid headset pose as its
@@ -189,7 +190,6 @@ the OpenXR module is intentionally restricted to `arm64-v8a` for Quest.
 4. Add a Mario Kart 64 profile to identify the main world projection and tune a close chase/driver
    camera without applying head transforms to sky/HUD passes.
 5. Add a visible immersive debug overlay with pose, eye matrices, draw counts, and frame timings.
-6. Add an explicit in-headset recenter action and then an OpenXR action-set fallback for Touch input.
+6. Add an OpenXR action-set fallback for Touch input and expose recenter without the 2D drawer.
 7. Enable comfort-limited position tracking, collect culling failures, and refine clipping/submission
    retention around the original game camera.
-

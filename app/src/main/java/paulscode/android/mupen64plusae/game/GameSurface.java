@@ -189,6 +189,12 @@ public class GameSurface extends SurfaceView implements SurfaceHolder.Callback
         }
     }
 
+    public void recenterQuestVr() {
+        if (mRenderThread != null && mRenderThread.getHandler() != null) {
+            mRenderThread.getHandler().sendQuestVrRecenter();
+        }
+    }
+
     @Override
     public void surfaceCreated(@NonNull SurfaceHolder holder) {
         Log.i(TAG, "surfaceCreated");
@@ -859,6 +865,12 @@ public class GameSurface extends SurfaceView implements SurfaceHolder.Callback
             mHandler.sendQuestVrFrame(submitted ? 0 : 10);
         }
 
+        private void recenterQuestVr() {
+            if (mQuestVrActive) {
+                QuestVrBridge.recenter();
+            }
+        }
+
         /**
          * Handles incoming frame
          */
@@ -975,6 +987,7 @@ public class GameSurface extends SurfaceView implements SurfaceHolder.Callback
         private static final int MSG_FRAME_AVAILABLE = 4;
         private static final int MSG_GET_SCREENSHOT = 5;
         private static final int MSG_QUEST_VR_FRAME = 6;
+        private static final int MSG_QUEST_VR_RECENTER = 7;
 
         private static class ScreenShotRequest {
             public String mDir;
@@ -1037,6 +1050,10 @@ public class GameSurface extends SurfaceView implements SurfaceHolder.Callback
             sendEmptyMessageDelayed(MSG_QUEST_VR_FRAME, delayMilliseconds);
         }
 
+        public void sendQuestVrRecenter() {
+            sendEmptyMessage(MSG_QUEST_VR_RECENTER);
+        }
+
 
         @Override
         public void handleMessage(Message msg) {
@@ -1063,6 +1080,9 @@ public class GameSurface extends SurfaceView implements SurfaceHolder.Callback
                     break;
                 case MSG_QUEST_VR_FRAME:
                     renderThread.renderQuestVrFrame();
+                    break;
+                case MSG_QUEST_VR_RECENTER:
+                    renderThread.recenterQuestVr();
                     break;
                 default:
                     throw new RuntimeException("unknown message " + what);

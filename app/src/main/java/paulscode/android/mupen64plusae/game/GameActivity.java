@@ -845,6 +845,8 @@ public class GameActivity extends AppCompatActivity implements PromptConfirmList
                 this.getSystemService(Context.INPUT_METHOD_SERVICE);
             if (imeManager != null)
                 imeManager.showInputMethodPicker();
+        } else if (menuItem.getItemId() == R.id.menuItem_quest_vr_recenter) {
+            mGameSurface.recenterQuestVr();
         } else if (menuItem.getItemId() ==  R.id.menuItem_reset) {
             mCoreFragment.restart();
         }
@@ -1085,6 +1087,11 @@ public class GameActivity extends AppCompatActivity implements PromptConfirmList
         boolean isKeyboard = (event.getSource() & InputDevice.SOURCE_GAMEPAD) != InputDevice.SOURCE_GAMEPAD &&
                 (event.getSource() & InputDevice.SOURCE_JOYSTICK) != InputDevice.SOURCE_JOYSTICK;
         final boolean keyDown = event.getAction() == KeyEvent.ACTION_DOWN;
+
+        if (keyDown && keyCode == KeyEvent.KEYCODE_F12) {
+            mGameSurface.recenterQuestVr();
+            return true;
+        }
 
         boolean handled = false;
 

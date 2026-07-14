@@ -64,6 +64,9 @@ std::atomic<float> s_cameraOffsetY{0.0f};
 std::atomic<float> s_cameraOffsetZ{0.0f};
 std::atomic<unsigned int> s_poseGeneration{1};
 std::atomic<unsigned int> s_configGeneration{1};
+std::atomic<unsigned int> s_geometryDraws{0};
+std::atomic<unsigned int> s_rectangleDraws{0};
+std::atomic<unsigned int> s_eyeDraws{0};
 
 AtomicPose s_pose;
 AtomicPose s_recenterPose;
@@ -427,6 +430,12 @@ DrawScope::DrawScope(bool transformGeometry)
 	: m_active(isStereoEnabled() && s_viewport.width >= 2 && s_viewport.height > 0)
 	, m_transformGeometry(transformGeometry)
 {
+	if (m_active) {
+		if (m_transformGeometry)
+			s_geometryDraws.fetch_add(1, std::memory_order_relaxed);
+		else
+			s_rectangleDraws.fetch_add(1, std::memory_order_relaxed);
+	}
 }
 
 DrawScope::~DrawScope()
@@ -448,6 +457,7 @@ void DrawScope::selectEye(unsigned int eye)
 {
 	if (!m_active)
 		return;
+	s_eyeDraws.fetch_add(1, std::memory_order_relaxed);
 
 	const int leftWidth = s_viewport.width / 2;
 	const int eyeWidth = eye == 0 ? leftWidth : s_viewport.width - leftWidth;
@@ -517,4 +527,17 @@ extern "C" QUEST_VR_EXPORT void M64PQuestVrConfigure(int stereoEnabled, float ip
 extern "C" QUEST_VR_EXPORT void M64PQuestVrRecenter()
 {
 	s_recenterRequested.store(true, std::memory_order_release);
+}
+
+extern "C" QUEST_VR_EXPORT void M64PQuestVrGetStats(unsigned int* geometryDraws,
+	unsigned int* rectangleDraws, unsigned int* eyeDraws, unsigned int* poseGeneration)
+{
+	if (geometryDraws != nullptr)
+		*geometryDraws = s_geometryDraws.load(std::memory_order_relaxed);
+	if (rectangleDraws != nullptr)
+		*rectangleDraws = s_rectangleDraws.load(std::memory_order_relaxed);
+	if (eyeDraws != nullptr)
+		*eyeDraws = s_eyeDraws.load(std::memory_order_relaxed);
+	if (poseGeneration != nullptr)
+		*poseGeneration = s_poseGeneration.load(std::memory_order_relaxed);
 }

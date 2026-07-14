@@ -61,6 +61,7 @@
     <string name="menuItem_paks_transfer_player4_ram">Player 4 Gameboy RAM</string>
     <string name="menuItem_setIme">Change IME</string>
     <string name="menuItem_exit">Exit</string>
+    <string name="menuItem_questVrRecenter">Recenter Quest VR view</string>
 
     <!-- Input Mapping Activity -->
     <string name="menuItem_deadzone">Deadzone</string>

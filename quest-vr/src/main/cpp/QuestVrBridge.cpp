@@ -36,6 +36,8 @@ using ConfigureVrFn = void (*)(int stereoEnabled, float ipdMeters, float worldUn
                                float rotationStrength, int positionEnabled, float maxTranslationMeters,
                                float cameraOffsetX, float cameraOffsetY, float cameraOffsetZ);
 using RecenterVrFn = void (*)();
+using GetVrStatsFn = void (*)(uint32_t* geometryDraws, uint32_t* rectangleDraws,
+                              uint32_t* eyeDraws, uint32_t* poseGeneration);
 
 struct State {
     JavaVM* vm{nullptr};
@@ -72,6 +74,7 @@ struct State {
     SetVrPoseFn setVrPose{nullptr};
     ConfigureVrFn configureVr{nullptr};
     RecenterVrFn recenterVr{nullptr};
+    GetVrStatsFn getVrStats{nullptr};
     bool rendererBridgeLogged{false};
 
     bool configurationStereoEnabled{true};
@@ -83,6 +86,8 @@ struct State {
     float configurationCameraOffsetX{0.0f};
     float configurationCameraOffsetY{0.0f};
     float configurationCameraOffsetZ{0.0f};
+    bool debugLogging{false};
+    uint32_t submittedFrameCount{0};
 };
 
 State g;
@@ -199,6 +204,7 @@ void resolveRendererBridge() {
     g.setVrPose = reinterpret_cast<SetVrPoseFn>(dlsym(symbolScope, "M64PQuestVrSetPose"));
     g.configureVr = reinterpret_cast<ConfigureVrFn>(dlsym(symbolScope, "M64PQuestVrConfigure"));
     g.recenterVr = reinterpret_cast<RecenterVrFn>(dlsym(symbolScope, "M64PQuestVrRecenter"));
+    g.getVrStats = reinterpret_cast<GetVrStatsFn>(dlsym(symbolScope, "M64PQuestVrGetStats"));
 
     const bool found = g.setVrEnabled != nullptr && g.setVrPose != nullptr;
     if (found) {
@@ -238,6 +244,22 @@ void publishHeadPose(XrTime displayTime, uint32_t viewCount) {
 
     g.setVrPose(pose.orientation.x, pose.orientation.y, pose.orientation.z, pose.orientation.w,
                 position.x, position.y, position.z, static_cast<int64_t>(displayTime));
+
+    ++g.submittedFrameCount;
+    if (g.debugLogging && g.submittedFrameCount % 300 == 0) {
+        uint32_t geometryDraws = 0;
+        uint32_t rectangleDraws = 0;
+        uint32_t eyeDraws = 0;
+        uint32_t poseGeneration = 0;
+        if (g.getVrStats != nullptr) {
+            g.getVrStats(&geometryDraws, &rectangleDraws, &eyeDraws, &poseGeneration);
+        }
+        LOGI("pose q=[%.3f %.3f %.3f %.3f] p=[%.3f %.3f %.3f], "
+             "draws geometry=%u rect=%u eyes=%u poseGeneration=%u",
+             pose.orientation.x, pose.orientation.y, pose.orientation.z, pose.orientation.w,
+             position.x, position.y, position.z, geometryDraws, rectangleDraws, eyeDraws,
+             poseGeneration);
+    }
 }
 
 bool selectColorFormat() {
@@ -600,7 +622,7 @@ Java_paulscode_android_mupen64plusae_questvr_QuestVrBridge_nativeConfigure(
         JNIEnv*, jclass, jboolean stereoEnabled, jfloat ipdMeters,
         jfloat worldUnitsPerMeter, jfloat rotationStrength, jboolean positionEnabled,
         jfloat maxTranslationMeters, jfloat cameraOffsetX, jfloat cameraOffsetY,
-        jfloat cameraOffsetZ) {
+        jfloat cameraOffsetZ, jboolean debugLogging) {
     g.configurationStereoEnabled = stereoEnabled == JNI_TRUE;
     g.configurationIpdMeters = ipdMeters;
     g.configurationWorldUnitsPerMeter = worldUnitsPerMeter;
@@ -610,6 +632,7 @@ Java_paulscode_android_mupen64plusae_questvr_QuestVrBridge_nativeConfigure(
     g.configurationCameraOffsetX = cameraOffsetX;
     g.configurationCameraOffsetY = cameraOffsetY;
     g.configurationCameraOffsetZ = cameraOffsetZ;
+    g.debugLogging = debugLogging == JNI_TRUE;
     if (g.configureVr != nullptr) {
         g.configureVr(g.configurationStereoEnabled ? 1 : 0, g.configurationIpdMeters,
                       g.configurationWorldUnitsPerMeter, g.configurationRotationStrength,
