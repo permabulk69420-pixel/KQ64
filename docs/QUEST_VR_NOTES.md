@@ -16,6 +16,7 @@ The prototype currently contains:
   `N64 projection * VR view * inverse(N64 projection)`;
 - monoscopic duplication of rectangle/HUD draws into both eye viewports;
 - expanded GLideN64 CPU clipping while stereo is active;
+- an OpenXR Touch action-set fallback merged with the normal player-one controller state;
 - automatic fallback to the existing Android presentation path when no VR headset/runtime is present.
 
 This is native stereo geometry work, not a completed-frame texture copied to both eyes. The OpenXR
@@ -65,6 +66,7 @@ The module uses the loader's Prefab CMake target and implements:
 - orientation and center-eye position publication using predicted display time;
 - recenter propagation on OpenXR reference-space changes;
 - explicit recenter from the in-game drawer or a paired keyboard's F12 key;
+- Touch controller action sync, with both thumbsticks clicked together as an in-headset recenter;
 - clean resource destruction before the EGL context is destroyed.
 
 The OpenXR layer currently samples the emulator's external-OES texture into each eye swapchain. A
@@ -120,6 +122,7 @@ Developer settings are stored in Android shared preferences named `quest_vr`. De
 | `hud_scale` | `1.0` | Reserved for a composited HUD layer |
 | `hud_mode` | `monoscopic_overlay` | Documents the current zero-disparity HUD policy |
 | `culling_expansion` | `1.25` | Reserved for a graduated clipping policy |
+| `touch_controller_enabled` | `true` | Merges OpenXR Touch input into N64 player one |
 | `debug_logging` | `false` | Periodically logs pose and stereo draw counters |
 
 Positional tracking is intentionally off by default for the first Quest build. Orientation and eye
@@ -149,6 +152,7 @@ the OpenXR module is intentionally restricted to `arm64-v8a` for Quest.
 - `GameSurface.java`: GLES 3/OpenXR selection, VR frame pacing, fallback, and lifecycle cleanup.
 - `ShaderDrawer.java`: separate external-texture latching from normal Android shader presentation.
 - `mupen64plus-video-gliden64/upstream/src/QuestVr.*`: explicit VR state/configuration and C bridge.
+- `mupen64plus-input-android/src/plugin.cpp`: thread-safe optional Touch overlay for player one.
 - GLideN64 OpenGL drawers: two-eye viewport replay without duplicate vertex uploads.
 - GLideN64 generated triangle shaders: eye/head clip transforms.
 - `gSP.cpp`: stereo-aware clipping retention.
@@ -168,8 +172,11 @@ the OpenXR module is intentionally restricted to `arm64-v8a` for Quest.
 - OpenXR swapchain rendering is single-sample, and no foveation extension is enabled.
 - A 30 FPS N64 title is latched into a higher-rate OpenXR loop; the runtime supplies head timewarp,
   but game-camera updates still occur at emulation cadence.
-- Quest Touch input currently relies on Android key/motion events and the existing controller stack;
-  there is no native OpenXR action mapping yet.
+- Touch input uses the core Oculus Touch interaction profile, which Quest Touch Plus can expose
+  through runtime compatibility. The current mapping is left stick=N64 stick, A/B=N64 A/B,
+  either index trigger=Z, left/right squeeze=L/R, right stick=C buttons, right stick click=Start,
+  X/Y=D-pad left/up, and both stick clicks=recenter. Paired Android controllers remain usable and
+  their buttons are merged; an active Touch left stick takes analog priority.
 
 ## First device test checklist
 
@@ -178,8 +185,9 @@ the OpenXR module is intentionally restricted to `arm64-v8a` for Quest.
 3. Verify each eye receives the correct half (no inverted stereo).
 4. Confirm the course geometry has parallax while HUD rectangles remain zero disparity.
 5. Check yaw, pitch, and roll direction from a stationary kart.
-6. Tune `world_units_per_meter`, IPD, and camera Z offset before enabling positional tracking.
-7. Record emulator FPS, OpenXR cadence, thermals, framebuffer-effect defects, disappearing geometry,
+6. Verify Touch A/B, analog steering, Z/R, C buttons, Start, and the two-stick-click recenter chord.
+7. Tune `world_units_per_meter`, IPD, and camera Z offset before enabling positional tracking.
+8. Record emulator FPS, OpenXR cadence, thermals, framebuffer-effect defects, disappearing geometry,
    and any native crash backtrace.
 
 ## Next implementation steps
@@ -190,6 +198,7 @@ the OpenXR module is intentionally restricted to `arm64-v8a` for Quest.
 4. Add a Mario Kart 64 profile to identify the main world projection and tune a close chase/driver
    camera without applying head transforms to sky/HUD passes.
 5. Add a visible immersive debug overlay with pose, eye matrices, draw counts, and frame timings.
-6. Add an OpenXR action-set fallback for Touch input and expose recenter without the 2D drawer.
+6. Validate and tune the OpenXR Touch mapping on Quest 3, then add input haptics and an immersive
+   settings/recenter panel.
 7. Enable comfort-limited position tracking, collect culling failures, and refine clipping/submission
    retention around the original game camera.

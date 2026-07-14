@@ -48,7 +48,8 @@ public final class QuestVrBridge {
                     configuration.worldUnitsPerMeter, configuration.rotationStrength,
                     configuration.positionEnabled, configuration.maxTranslationMeters,
                     configuration.cameraOffsetXMeters, configuration.cameraOffsetYMeters,
-                    configuration.cameraOffsetZMeters, configuration.debugLogging);
+                    configuration.cameraOffsetZMeters, configuration.touchControllerEnabled,
+                    configuration.debugLogging);
         }
     }
 
@@ -77,7 +78,7 @@ public final class QuestVrBridge {
     private static native void nativeConfigure(boolean stereoEnabled, float ipdMeters,
             float worldUnitsPerMeter, float rotationStrength, boolean positionEnabled,
             float maxTranslationMeters, float cameraOffsetXMeters, float cameraOffsetYMeters,
-            float cameraOffsetZMeters, boolean debugLogging);
+            float cameraOffsetZMeters, boolean touchControllerEnabled, boolean debugLogging);
     private static native void nativeRecenter();
     private static native boolean nativeRenderFrame();
     private static native boolean nativeIsStereoSourceActive();

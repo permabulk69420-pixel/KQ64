@@ -9,6 +9,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <string>
@@ -38,6 +39,23 @@ using ConfigureVrFn = void (*)(int stereoEnabled, float ipdMeters, float worldUn
 using RecenterVrFn = void (*)();
 using GetVrStatsFn = void (*)(uint32_t* geometryDraws, uint32_t* rectangleDraws,
                               uint32_t* eyeDraws, uint32_t* poseGeneration);
+using SetVrInputFn = void (*)(int enabled, uint32_t buttonMask, float analogX, float analogY);
+
+struct ControllerActions {
+    XrActionSet actionSet{XR_NULL_HANDLE};
+    XrAction leftStick{XR_NULL_HANDLE};
+    XrAction rightStick{XR_NULL_HANDLE};
+    XrAction buttonA{XR_NULL_HANDLE};
+    XrAction buttonB{XR_NULL_HANDLE};
+    XrAction buttonX{XR_NULL_HANDLE};
+    XrAction buttonY{XR_NULL_HANDLE};
+    XrAction leftTrigger{XR_NULL_HANDLE};
+    XrAction rightTrigger{XR_NULL_HANDLE};
+    XrAction leftSqueeze{XR_NULL_HANDLE};
+    XrAction rightSqueeze{XR_NULL_HANDLE};
+    XrAction leftStickClick{XR_NULL_HANDLE};
+    XrAction rightStickClick{XR_NULL_HANDLE};
+};
 
 struct State {
     JavaVM* vm{nullptr};
@@ -75,7 +93,12 @@ struct State {
     ConfigureVrFn configureVr{nullptr};
     RecenterVrFn recenterVr{nullptr};
     GetVrStatsFn getVrStats{nullptr};
+    SetVrInputFn setVrInput{nullptr};
     bool rendererBridgeLogged{false};
+    bool inputBridgeLogged{false};
+
+    ControllerActions controllerActions;
+    bool recenterChordDown{false};
 
     bool configurationStereoEnabled{true};
     float configurationIpdMeters{0.064f};
@@ -86,6 +109,7 @@ struct State {
     float configurationCameraOffsetX{0.0f};
     float configurationCameraOffsetY{0.0f};
     float configurationCameraOffsetZ{0.0f};
+    bool touchControllerEnabled{true};
     bool debugLogging{false};
     uint32_t submittedFrameCount{0};
 };
@@ -106,6 +130,116 @@ bool xrOk(XrResult result, const char* operation) {
         LOGE("%s failed: %s", operation, xrResultName(result));
         return false;
     }
+    return true;
+}
+
+bool createAction(XrActionSet actionSet, XrActionType type, const char* name,
+                  const char* localizedName, XrAction& action) {
+    XrActionCreateInfo info{XR_TYPE_ACTION_CREATE_INFO};
+    info.actionType = type;
+    std::strncpy(info.actionName, name, XR_MAX_ACTION_NAME_SIZE - 1);
+    std::strncpy(info.localizedActionName, localizedName, XR_MAX_LOCALIZED_ACTION_NAME_SIZE - 1);
+    return xrOk(xrCreateAction(actionSet, &info, &action), name);
+}
+
+bool createControllerActions() {
+    ControllerActions& actions = g.controllerActions;
+    XrActionSetCreateInfo setInfo{XR_TYPE_ACTION_SET_CREATE_INFO};
+    std::strncpy(setInfo.actionSetName, "n64_controller", XR_MAX_ACTION_SET_NAME_SIZE - 1);
+    std::strncpy(setInfo.localizedActionSetName, "N64 Controller",
+                 XR_MAX_LOCALIZED_ACTION_SET_NAME_SIZE - 1);
+    if (!xrOk(xrCreateActionSet(g.instance, &setInfo, &actions.actionSet),
+              "xrCreateActionSet(N64 controller)")) {
+        return false;
+    }
+
+    const bool created =
+        createAction(actions.actionSet, XR_ACTION_TYPE_VECTOR2F_INPUT, "left_stick",
+                     "N64 Control Stick", actions.leftStick) &&
+        createAction(actions.actionSet, XR_ACTION_TYPE_VECTOR2F_INPUT, "right_stick",
+                     "N64 C Buttons", actions.rightStick) &&
+        createAction(actions.actionSet, XR_ACTION_TYPE_BOOLEAN_INPUT, "button_a",
+                     "N64 A Button", actions.buttonA) &&
+        createAction(actions.actionSet, XR_ACTION_TYPE_BOOLEAN_INPUT, "button_b",
+                     "N64 B Button", actions.buttonB) &&
+        createAction(actions.actionSet, XR_ACTION_TYPE_BOOLEAN_INPUT, "button_x",
+                     "N64 D-Pad Left", actions.buttonX) &&
+        createAction(actions.actionSet, XR_ACTION_TYPE_BOOLEAN_INPUT, "button_y",
+                     "N64 D-Pad Up", actions.buttonY) &&
+        createAction(actions.actionSet, XR_ACTION_TYPE_FLOAT_INPUT, "left_trigger",
+                     "N64 Z Trigger Left", actions.leftTrigger) &&
+        createAction(actions.actionSet, XR_ACTION_TYPE_FLOAT_INPUT, "right_trigger",
+                     "N64 Z Trigger Right", actions.rightTrigger) &&
+        createAction(actions.actionSet, XR_ACTION_TYPE_FLOAT_INPUT, "left_squeeze",
+                     "N64 L Trigger", actions.leftSqueeze) &&
+        createAction(actions.actionSet, XR_ACTION_TYPE_FLOAT_INPUT, "right_squeeze",
+                     "N64 R Trigger", actions.rightSqueeze) &&
+        createAction(actions.actionSet, XR_ACTION_TYPE_BOOLEAN_INPUT, "left_stick_click",
+                     "VR Recenter Chord", actions.leftStickClick) &&
+        createAction(actions.actionSet, XR_ACTION_TYPE_BOOLEAN_INPUT, "right_stick_click",
+                     "N64 Start Button", actions.rightStickClick);
+    if (!created) {
+        xrDestroyActionSet(actions.actionSet);
+        actions = {};
+        return false;
+    }
+
+    struct BindingPath {
+        XrAction action;
+        const char* path;
+    };
+    const std::array<BindingPath, 12> bindingPaths{{
+        {actions.leftStick, "/user/hand/left/input/thumbstick"},
+        {actions.rightStick, "/user/hand/right/input/thumbstick"},
+        {actions.buttonA, "/user/hand/right/input/a/click"},
+        {actions.buttonB, "/user/hand/right/input/b/click"},
+        {actions.buttonX, "/user/hand/left/input/x/click"},
+        {actions.buttonY, "/user/hand/left/input/y/click"},
+        {actions.leftTrigger, "/user/hand/left/input/trigger/value"},
+        {actions.rightTrigger, "/user/hand/right/input/trigger/value"},
+        {actions.leftSqueeze, "/user/hand/left/input/squeeze/value"},
+        {actions.rightSqueeze, "/user/hand/right/input/squeeze/value"},
+        {actions.leftStickClick, "/user/hand/left/input/thumbstick/click"},
+        {actions.rightStickClick, "/user/hand/right/input/thumbstick/click"},
+    }};
+    std::array<XrActionSuggestedBinding, 12> bindings{};
+    for (size_t i = 0; i < bindingPaths.size(); ++i) {
+        bindings[i].action = bindingPaths[i].action;
+        if (!xrOk(xrStringToPath(g.instance, bindingPaths[i].path, &bindings[i].binding),
+                  bindingPaths[i].path)) {
+            xrDestroyActionSet(actions.actionSet);
+            actions = {};
+            return false;
+        }
+    }
+
+    XrPath interactionProfile = XR_NULL_PATH;
+    if (!xrOk(xrStringToPath(g.instance, "/interaction_profiles/oculus/touch_controller",
+                             &interactionProfile), "Oculus Touch interaction profile")) {
+        xrDestroyActionSet(actions.actionSet);
+        actions = {};
+        return false;
+    }
+    XrInteractionProfileSuggestedBinding suggested{XR_TYPE_INTERACTION_PROFILE_SUGGESTED_BINDING};
+    suggested.interactionProfile = interactionProfile;
+    suggested.countSuggestedBindings = static_cast<uint32_t>(bindings.size());
+    suggested.suggestedBindings = bindings.data();
+    if (!xrOk(xrSuggestInteractionProfileBindings(g.instance, &suggested),
+              "xrSuggestInteractionProfileBindings(Oculus Touch)")) {
+        xrDestroyActionSet(actions.actionSet);
+        actions = {};
+        return false;
+    }
+
+    XrSessionActionSetsAttachInfo attach{XR_TYPE_SESSION_ACTION_SETS_ATTACH_INFO};
+    attach.countActionSets = 1;
+    attach.actionSets = &actions.actionSet;
+    if (!xrOk(xrAttachSessionActionSets(g.session, &attach), "xrAttachSessionActionSets")) {
+        xrDestroyActionSet(actions.actionSet);
+        actions = {};
+        return false;
+    }
+    LOGI("OpenXR Touch actions attached for N64 controller fallback");
     return true;
 }
 
@@ -226,6 +360,133 @@ void resolveRendererBridge() {
     if (videoPlugin != nullptr) {
         dlclose(videoPlugin);
     }
+}
+
+void resolveInputBridge() {
+    if (g.setVrInput != nullptr) {
+        return;
+    }
+
+    void* inputPlugin = dlopen("libmupen64plus-input-android.so", RTLD_NOW | RTLD_NOLOAD);
+    void* symbolScope = inputPlugin != nullptr ? inputPlugin : RTLD_DEFAULT;
+    g.setVrInput = reinterpret_cast<SetVrInputFn>(dlsym(symbolScope, "M64PQuestVrSetInput"));
+    if (g.setVrInput != nullptr) {
+        LOGI("Connected OpenXR Touch actions to Android N64 input overlay");
+    } else if (!g.inputBridgeLogged) {
+        LOGI("Android input plugin is not loaded yet; Touch input will be retried");
+        g.inputBridgeLogged = true;
+    }
+    if (inputPlugin != nullptr) {
+        dlclose(inputPlugin);
+    }
+}
+
+bool readBooleanAction(XrAction action) {
+    XrActionStateGetInfo getInfo{XR_TYPE_ACTION_STATE_GET_INFO};
+    getInfo.action = action;
+    XrActionStateBoolean state{XR_TYPE_ACTION_STATE_BOOLEAN};
+    return XR_SUCCEEDED(xrGetActionStateBoolean(g.session, &getInfo, &state)) &&
+           state.isActive == XR_TRUE && state.currentState == XR_TRUE;
+}
+
+float readFloatAction(XrAction action) {
+    XrActionStateGetInfo getInfo{XR_TYPE_ACTION_STATE_GET_INFO};
+    getInfo.action = action;
+    XrActionStateFloat state{XR_TYPE_ACTION_STATE_FLOAT};
+    if (XR_SUCCEEDED(xrGetActionStateFloat(g.session, &getInfo, &state)) &&
+        state.isActive == XR_TRUE) {
+        return state.currentState;
+    }
+    return 0.0f;
+}
+
+XrVector2f readVectorAction(XrAction action) {
+    XrActionStateGetInfo getInfo{XR_TYPE_ACTION_STATE_GET_INFO};
+    getInfo.action = action;
+    XrActionStateVector2f state{XR_TYPE_ACTION_STATE_VECTOR2F};
+    if (XR_SUCCEEDED(xrGetActionStateVector2f(g.session, &getInfo, &state)) &&
+        state.isActive == XR_TRUE) {
+        return state.currentState;
+    }
+    return {};
+}
+
+XrVector2f applyStickDeadzone(XrVector2f stick) {
+    constexpr float deadzone = 0.15f;
+    const float length = std::sqrt(stick.x * stick.x + stick.y * stick.y);
+    if (length <= deadzone) {
+        return {};
+    }
+    const float remappedLength = std::min(1.0f, (length - deadzone) / (1.0f - deadzone));
+    const float scale = remappedLength / length;
+    return {stick.x * scale, stick.y * scale};
+}
+
+void syncControllerInput() {
+    resolveInputBridge();
+    if (g.setVrInput == nullptr) {
+        return;
+    }
+    if (!g.touchControllerEnabled || g.controllerActions.actionSet == XR_NULL_HANDLE) {
+        g.setVrInput(0, 0, 0.0f, 0.0f);
+        return;
+    }
+
+    const XrActiveActionSet activeSet{g.controllerActions.actionSet, XR_NULL_PATH};
+    XrActionsSyncInfo syncInfo{XR_TYPE_ACTIONS_SYNC_INFO};
+    syncInfo.countActiveActionSets = 1;
+    syncInfo.activeActionSets = &activeSet;
+    if (XR_FAILED(xrSyncActions(g.session, &syncInfo))) {
+        g.setVrInput(0, 0, 0.0f, 0.0f);
+        return;
+    }
+
+    // N64 button bits match mupen64plus-input-android's BUTTON_BITS table.
+    constexpr uint32_t dpadLeft = 0x0002;
+    constexpr uint32_t dpadUp = 0x0008;
+    constexpr uint32_t start = 0x0010;
+    constexpr uint32_t zTrigger = 0x0020;
+    constexpr uint32_t bButton = 0x0040;
+    constexpr uint32_t aButton = 0x0080;
+    constexpr uint32_t cRight = 0x0100;
+    constexpr uint32_t cLeft = 0x0200;
+    constexpr uint32_t cDown = 0x0400;
+    constexpr uint32_t cUp = 0x0800;
+    constexpr uint32_t rTrigger = 0x1000;
+    constexpr uint32_t lTrigger = 0x2000;
+
+    uint32_t buttons = 0;
+    if (readBooleanAction(g.controllerActions.buttonA)) buttons |= aButton;
+    if (readBooleanAction(g.controllerActions.buttonB)) buttons |= bButton;
+    if (readBooleanAction(g.controllerActions.buttonX)) buttons |= dpadLeft;
+    if (readBooleanAction(g.controllerActions.buttonY)) buttons |= dpadUp;
+    if (readFloatAction(g.controllerActions.leftTrigger) > 0.45f ||
+        readFloatAction(g.controllerActions.rightTrigger) > 0.45f) buttons |= zTrigger;
+    if (readFloatAction(g.controllerActions.leftSqueeze) > 0.45f) buttons |= lTrigger;
+    if (readFloatAction(g.controllerActions.rightSqueeze) > 0.45f) buttons |= rTrigger;
+
+    const XrVector2f rightStick = applyStickDeadzone(readVectorAction(g.controllerActions.rightStick));
+    if (rightStick.x > 0.45f) buttons |= cRight;
+    if (rightStick.x < -0.45f) buttons |= cLeft;
+    if (rightStick.y > 0.45f) buttons |= cUp;
+    if (rightStick.y < -0.45f) buttons |= cDown;
+
+    const bool leftClick = readBooleanAction(g.controllerActions.leftStickClick);
+    const bool rightClick = readBooleanAction(g.controllerActions.rightStickClick);
+    const bool recenterChord = leftClick && rightClick;
+    if (recenterChord && !g.recenterChordDown) {
+        resolveRendererBridge();
+        if (g.recenterVr != nullptr) {
+            g.recenterVr();
+            LOGI("Recentered VR view from Touch thumbstick chord");
+        }
+    } else if (rightClick && !leftClick) {
+        buttons |= start;
+    }
+    g.recenterChordDown = recenterChord;
+
+    const XrVector2f leftStick = applyStickDeadzone(readVectorAction(g.controllerActions.leftStick));
+    g.setVrInput(1, buttons, leftStick.x, leftStick.y);
 }
 
 void publishHeadPose(XrTime displayTime, uint32_t viewCount) {
@@ -438,6 +699,9 @@ void destroyState(JNIEnv* env) {
     if (g.setVrEnabled != nullptr) {
         g.setVrEnabled(0);
     }
+    if (g.setVrInput != nullptr) {
+        g.setVrInput(0, 0, 0.0f, 0.0f);
+    }
 
     if (g.program != 0) glDeleteProgram(g.program);
     if (g.framebuffer != 0) glDeleteFramebuffers(1, &g.framebuffer);
@@ -449,6 +713,10 @@ void destroyState(JNIEnv* env) {
     if (g.sessionRunning && g.session != XR_NULL_HANDLE) {
         xrEndSession(g.session);
         g.sessionRunning = false;
+    }
+    if (g.controllerActions.actionSet != XR_NULL_HANDLE) {
+        xrDestroyActionSet(g.controllerActions.actionSet);
+        g.controllerActions = {};
     }
     for (Swapchain& swapchain : g.swapchains) {
         if (swapchain.handle != XR_NULL_HANDLE) xrDestroySwapchain(swapchain.handle);
@@ -576,6 +844,10 @@ bool initializeOpenXr(JNIEnv* env, jobject activity) {
         return false;
     }
 
+    if (!createControllerActions()) {
+        LOGW("OpenXR Touch action setup failed; paired Android controllers remain available");
+    }
+
     XrReferenceSpaceCreateInfo spaceInfo{XR_TYPE_REFERENCE_SPACE_CREATE_INFO};
     spaceInfo.referenceSpaceType = XR_REFERENCE_SPACE_TYPE_LOCAL;
     setIdentity(spaceInfo.poseInReferenceSpace);
@@ -622,7 +894,7 @@ Java_paulscode_android_mupen64plusae_questvr_QuestVrBridge_nativeConfigure(
         JNIEnv*, jclass, jboolean stereoEnabled, jfloat ipdMeters,
         jfloat worldUnitsPerMeter, jfloat rotationStrength, jboolean positionEnabled,
         jfloat maxTranslationMeters, jfloat cameraOffsetX, jfloat cameraOffsetY,
-        jfloat cameraOffsetZ, jboolean debugLogging) {
+        jfloat cameraOffsetZ, jboolean touchControllerEnabled, jboolean debugLogging) {
     g.configurationStereoEnabled = stereoEnabled == JNI_TRUE;
     g.configurationIpdMeters = ipdMeters;
     g.configurationWorldUnitsPerMeter = worldUnitsPerMeter;
@@ -632,6 +904,7 @@ Java_paulscode_android_mupen64plusae_questvr_QuestVrBridge_nativeConfigure(
     g.configurationCameraOffsetX = cameraOffsetX;
     g.configurationCameraOffsetY = cameraOffsetY;
     g.configurationCameraOffsetZ = cameraOffsetZ;
+    g.touchControllerEnabled = touchControllerEnabled == JNI_TRUE;
     g.debugLogging = debugLogging == JNI_TRUE;
     if (g.configureVr != nullptr) {
         g.configureVr(g.configurationStereoEnabled ? 1 : 0, g.configurationIpdMeters,
@@ -662,6 +935,8 @@ Java_paulscode_android_mupen64plusae_questvr_QuestVrBridge_nativeRenderFrame(
     if (!g.sessionRunning) {
         return JNI_FALSE;
     }
+
+    syncControllerInput();
 
     XrFrameWaitInfo waitInfo{XR_TYPE_FRAME_WAIT_INFO};
     XrFrameState frameState{XR_TYPE_FRAME_STATE};
