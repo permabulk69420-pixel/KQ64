@@ -1,0 +1,48 @@
+apply plugin: 'com.android.library'
+apply from: '../build_common/version_common.gradle'
+
+android {
+    namespace = "paulscode.android.mupen64plusae.questvr"
+
+    buildFeatures {
+        prefab = true
+    }
+
+    defaultConfig {
+        consumerProguardFiles 'consumer-rules.pro'
+        externalNativeBuild {
+            cmake {
+                cppFlags "-std=c++17", "-fexceptions", "-Wall", "-Wextra"
+                arguments "-DANDROID_STL=c++_shared"
+                abiFilters "arm64-v8a"
+            }
+        }
+    }
+
+    externalNativeBuild {
+        cmake {
+            version = "3.22.1"
+            path "src/main/cpp/CMakeLists.txt"
+        }
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+            ndk {
+                debugSymbolLevel = 'FULL'
+            }
+        }
+        debug {
+            minifyEnabled false
+            jniDebuggable true
+            ndk {
+                debugSymbolLevel = 'FULL'
+            }
+        }
+    }
+}
+
+dependencies {
+    implementation 'org.khronos.openxr:openxr_loader_for_android:1.1.61'
+}

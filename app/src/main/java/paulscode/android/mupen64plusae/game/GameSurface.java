@@ -20,6 +20,7 @@
  */
 package paulscode.android.mupen64plusae.game;
 
+import android.app.Activity;
 import android.content.ContentResolver;
 import android.content.ContentValues;
 import android.content.Context;
@@ -62,6 +63,7 @@ import paulscode.android.mupen64plusae.util.PixelBuffer;
 import static android.view.Surface.FRAME_RATE_COMPATIBILITY_DEFAULT;
 
 import paulscode.android.mupen64plusae.R;
+import paulscode.android.mupen64plusae.questvr.QuestVrBridge;
 
 /**
  * Represents a graphical area of memory that can be drawn to.
@@ -709,6 +711,7 @@ public class GameSurface extends SurfaceView implements SurfaceHolder.Callback
         private int mFrameCount = 0;
         private long mTimeMilliseconds = 0;
         private static final int mFpsRecalPeriodFrames = 30;
+        private boolean mQuestVrActive = false;
 
         /**
          * Constructor.
@@ -730,11 +733,21 @@ public class GameSurface extends SurfaceView implements SurfaceHolder.Callback
                 mStartLock.notify();
             }
 
-            if (createGLContext(2, false)) {
+            final boolean questVrCandidate = mContext instanceof Activity &&
+                    QuestVrBridge.isDeviceCapable(mContext);
+            final int glVersion = questVrCandidate ? 3 : 2;
+            if (createGLContext(glVersion, false)) {
+                startPresentation((Activity) (questVrCandidate ? mContext : null));
                 Looper.loop();
-            // Try a seecond time
-            } else if (createGLContext(2, true)) {
+            // Try a second time with freshly-created EGL objects.
+            } else if (createGLContext(glVersion, true)) {
+                startPresentation((Activity) (questVrCandidate ? mContext : null));
                 Looper.loop();
+            }
+
+            if (mQuestVrActive) {
+                QuestVrBridge.shutdown();
+                mQuestVrActive = false;
             }
 
             if (!destroyGLContext()) {
@@ -743,6 +756,18 @@ public class GameSurface extends SurfaceView implements SurfaceHolder.Callback
 
             synchronized (mStartLock) {
                 mReady = false;
+            }
+        }
+
+        private void startPresentation(Activity questActivity) {
+            if (questActivity != null) {
+                mQuestVrActive = QuestVrBridge.initialize(questActivity);
+                if (mQuestVrActive) {
+                    Log.i(TAG, "OpenXR presentation enabled");
+                    mHandler.sendQuestVrFrame(0);
+                } else {
+                    Log.w(TAG, "OpenXR unavailable; retaining normal Android presentation");
+                }
             }
         }
 
@@ -771,6 +796,7 @@ public class GameSurface extends SurfaceView implements SurfaceHolder.Callback
                 mFrameAvailableTexture.setOnFrameAvailableListener(null);
                 Choreographer.getInstance().removeFrameCallback(this);
             }
+            mHandler.removeMessages(RenderHandler.MSG_QUEST_VR_FRAME);
             mShaderDrawer.onSurfaceTextureDestroyed();
             Looper.myLooper().quit();
         }
@@ -805,8 +831,12 @@ public class GameSurface extends SurfaceView implements SurfaceHolder.Callback
          * Handles incoming fram
          */
         private void frameAvailable() {
-            mShaderDrawer.onDrawFrame();
-            flipBuffers();
+            if (mQuestVrActive) {
+                mShaderDrawer.updateSourceTexture();
+            } else {
+                mShaderDrawer.onDrawFrame();
+                flipBuffers();
+            }
 
             mFrameCount++;
             if (mFrameCount >= mFpsRecalPeriodFrames) {
@@ -817,18 +847,30 @@ public class GameSurface extends SurfaceView implements SurfaceHolder.Callback
             }
         }
 
+        private void renderQuestVrFrame() {
+            if (!mQuestVrActive) {
+                return;
+            }
+            final boolean submitted = QuestVrBridge.renderFrame();
+            mHandler.sendQuestVrFrame(submitted ? 0 : 10);
+        }
+
         /**
          * Handles incoming frame
          */
         private void surfaceTextureAvailable(int width, int height, PixelBuffer.SurfaceTextureWithSize surfaceTexture) {
             mFrameAvailableTexture = surfaceTexture.mSurfaceTexture;
-            if(ShaderLoader.needsVsync(mSelectedShaders)) {
+            if(!mQuestVrActive && ShaderLoader.needsVsync(mSelectedShaders)) {
                 Choreographer.getInstance().postFrameCallback(this);
             } else {
                 mFrameAvailableTexture.setOnFrameAvailableListener(this, mHandler);
             }
 
             mShaderDrawer.onSurfaceTextureAvailable(surfaceTexture, width, height);
+            if (mQuestVrActive) {
+                QuestVrBridge.setSourceTexture(mShaderDrawer.getSourceTextureId(),
+                        surfaceTexture.mWidth, surfaceTexture.mHeight, true);
+            }
 
             // Draw a single frame to prevent a black screen on rotation while game is paused
             frameAvailable();
@@ -908,6 +950,9 @@ public class GameSurface extends SurfaceView implements SurfaceHolder.Callback
                 mFrameAvailableTexture.setOnFrameAvailableListener(null);
                 Choreographer.getInstance().removeFrameCallback(this);
             }
+            if (mQuestVrActive) {
+                QuestVrBridge.setSourceTexture(0, 0, 0, false);
+            }
             mShaderDrawer.onSurfaceTextureDestroyed();
         }
     }
@@ -924,6 +969,7 @@ public class GameSurface extends SurfaceView implements SurfaceHolder.Callback
         private static final int MSG_SHUTDOWN = 3;
         private static final int MSG_FRAME_AVAILABLE = 4;
         private static final int MSG_GET_SCREENSHOT = 5;
+        private static final int MSG_QUEST_VR_FRAME = 6;
 
         private static class ScreenShotRequest {
             public String mDir;
@@ -982,6 +1028,10 @@ public class GameSurface extends SurfaceView implements SurfaceHolder.Callback
             sendMessage(obtainMessage(MSG_SURFACETEXTURE_DESTROYED));
         }
 
+        public void sendQuestVrFrame(long delayMilliseconds) {
+            sendEmptyMessageDelayed(MSG_QUEST_VR_FRAME, delayMilliseconds);
+        }
+
 
         @Override
         public void handleMessage(Message msg) {
@@ -1005,6 +1055,9 @@ public class GameSurface extends SurfaceView implements SurfaceHolder.Callback
                     break;
                 case MSG_GET_SCREENSHOT:
                     renderThread.takeScreenshot((ScreenShotRequest) msg.obj);
+                    break;
+                case MSG_QUEST_VR_FRAME:
+                    renderThread.renderQuestVrFrame();
                     break;
                 default:
                     throw new RuntimeException("unknown message " + what);

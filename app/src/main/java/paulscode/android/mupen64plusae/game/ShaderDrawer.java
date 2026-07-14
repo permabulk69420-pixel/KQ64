@@ -16,6 +16,7 @@ public class ShaderDrawer {
 
     private static final String TAG = "ShaderDrawer";
     private SurfaceTexture mGameTexture;
+    private int mGameTextureId = 0;
     private final ArrayList<ArrayList<Shader>> mShaderPasses = new ArrayList<>();
     private int mWidth = 0;
     private int mHeight = 0;
@@ -55,6 +56,7 @@ public class ShaderDrawer {
             int[] textures = new int[1];
             GLES20.glGenTextures(1, textures, 0);
             int texture = textures[0];
+            mGameTextureId = texture;
             GLES20.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, textures[0]);
 
             GLES20.glTexParameteri(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, GLES20.GL_TEXTURE_MIN_FILTER, GLES20.GL_LINEAR);
@@ -68,6 +70,7 @@ public class ShaderDrawer {
                 mGameTexture.attachToGLContext(texture);
             } catch (RuntimeException e) {
                 mGameTexture = null;
+                mGameTextureId = 0;
                 return;
             }
 
@@ -128,6 +131,22 @@ public class ShaderDrawer {
                 e.printStackTrace();
             }
             mGameTexture = null;
+            mGameTextureId = 0;
+        }
+    }
+
+    public int getSourceTextureId() {
+        return mGameTextureId;
+    }
+
+    /** Latch the newest emulator frame without running the Android presentation shaders. */
+    public void updateSourceTexture() {
+        if (mGameTexture != null) {
+            try {
+                mGameTexture.updateTexImage();
+            } catch (RuntimeException e) {
+                e.printStackTrace();
+            }
         }
     }
 
@@ -152,11 +171,7 @@ public class ShaderDrawer {
 
     public void onDrawFrame() {
         if (mGameTexture != null) {
-            try {
-                mGameTexture.updateTexImage();
-            } catch (RuntimeException e) {
-                e.printStackTrace();
-            }
+            updateSourceTexture();
 
             for (ArrayList<Shader> shaderSubPasses : mShaderPasses) {
                 for (Shader shader : shaderSubPasses) {
