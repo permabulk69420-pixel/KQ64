@@ -61,6 +61,7 @@ set(GLideN64_SOURCES
   PaletteTexture.cpp
   Performance.cpp
   PostProcessor.cpp
+  QuestVr.cpp
   RDP.cpp
   RSP.cpp
   RSP_LoadMatrix.cpp

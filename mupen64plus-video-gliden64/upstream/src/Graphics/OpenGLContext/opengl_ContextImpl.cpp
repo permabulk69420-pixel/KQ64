@@ -13,6 +13,7 @@
 #endif
 #include "opengl_ColorBufferReaderWithReadPixels.h"
 #include "opengl_Utils.h"
+#include "QuestVr.h"
 #include "GLSL/glsl_CombinerProgramBuilderAccurate.h"
 #include "GLSL/glsl_CombinerProgramBuilderFast.h"
 #include "GLSL/glsl_SpecialShadersFactory.h"
@@ -40,6 +41,7 @@ ContextImpl::~ContextImpl()
 
 void ContextImpl::init()
 {
+	QuestVr::resetGraphicsState();
 	m_clampMode = graphics::ClampMode::ClippingEnabled;
 	m_glInfo.init();
 
@@ -128,6 +130,8 @@ graphics::ClampMode ContextImpl::getClampMode()
 void ContextImpl::enable(graphics::EnableParam _parameter, bool _enable)
 {
 	m_cachedFunctions->getCachedEnable(_parameter)->enable(_enable);
+	if (_parameter == graphics::enable::SCISSOR_TEST)
+		QuestVr::setScissorEnabled(_enable);
 }
 
 u32 ContextImpl::isEnabled(graphics::EnableParam _parameter)
@@ -153,11 +157,13 @@ void ContextImpl::setDepthCompare(graphics::CompareParam _mode)
 void ContextImpl::setViewport(s32 _x, s32 _y, s32 _width, s32 _height)
 {
 	m_cachedFunctions->getCachedViewport()->setViewport(_x, _y, _width, _height);
+	QuestVr::setViewport(_x, _y, _width, _height);
 }
 
 void ContextImpl::setScissor(s32 _x, s32 _y, s32 _width, s32 _height)
 {
 	m_cachedFunctions->getCachedScissor()->setScissor(_x, _y, _width, _height);
+	QuestVr::setScissor(_x, _y, _width, _height);
 }
 
 void ContextImpl::setBlending(graphics::BlendParam _sfactor, graphics::BlendParam _dfactor)

@@ -3,6 +3,7 @@
 #include "opengl_Attributes.h"
 #include "opengl_CachedFunctions.h"
 #include "opengl_UnbufferedDrawer.h"
+#include "QuestVr.h"
 
 using namespace opengl;
 
@@ -91,35 +92,42 @@ void UnbufferedDrawer::drawTriangles(const graphics::Context::DrawTriangleParame
 	if (m_useCoverage)
 		m_cachedAttribArray->enableVertexAttribArray(rectAttrib::barycoords, false);
 
-	if (config.frameBufferEmulation.N64DepthCompare != Config::dcCompatible) {
+	const auto draw = [&]() {
+		if (config.frameBufferEmulation.N64DepthCompare != Config::dcCompatible) {
+			if (_params.elements == nullptr) {
+				glDrawArrays(GLenum(_params.mode), 0, _params.verticesCount);
+				return;
+			}
+
+			glDrawElements(GLenum(_params.mode), _params.elementsCount, GL_UNSIGNED_SHORT, _params.elements);
+			return;
+		}
+
+		// Draw polygons one by one.
 		if (_params.elements == nullptr) {
-			glDrawArrays(GLenum(_params.mode), 0, _params.verticesCount);
+			if (_params.mode != graphics::drawmode::TRIANGLES) {
+				glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT);
+				glDrawArrays(GLenum(_params.mode), 0, _params.verticesCount);
+				return;
+			}
+
+			for (GLint i = 0; i < GLint(_params.verticesCount); i += 3) {
+				glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT);
+				glDrawArrays(GLenum(_params.mode), i, 3);
+			}
 			return;
 		}
 
-		glDrawElements(GLenum(_params.mode), _params.elementsCount, GL_UNSIGNED_SHORT, _params.elements);
-		return;
-	}
-
-	// Draw polygons one by one
-
-	if (_params.elements == nullptr) {
-		if (_params.mode != graphics::drawmode::TRIANGLES) {
+		for (GLint i = 0; i < GLint(_params.elementsCount); i += 3) {
 			glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT);
-			glDrawArrays(GLenum(_params.mode), 0, _params.verticesCount);
-			return;
+			glDrawElements(GLenum(_params.mode), 3, GL_UNSIGNED_BYTE, (u8*)_params.elements + i);
 		}
+	};
 
-		for (GLint i = 0; i < GLint(_params.verticesCount); i += 3) {
-			glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT);
-			glDrawArrays(GLenum(_params.mode), i, 3);
-		}
-		return;
-	}
-
-	for (GLint i = 0; i < GLint(_params.elementsCount); i += 3) {
-		glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT);
-		glDrawElements(GLenum(_params.mode), 3, GL_UNSIGNED_BYTE, (u8*)_params.elements + i);
+	QuestVr::DrawScope stereoDraw(true);
+	for (u32 eye = 0; eye < stereoDraw.eyeCount(); ++eye) {
+		stereoDraw.selectEye(eye);
+		draw();
 	}
 }
 
@@ -162,7 +170,11 @@ void UnbufferedDrawer::drawRects(const graphics::Context::DrawRectParameters & _
 	if (m_useCoverage)
 		m_cachedAttribArray->enableVertexAttribArray(triangleAttrib::barycoords, false);
 
-	glDrawArrays(GLenum(_params.mode), 0, _params.verticesCount);
+	QuestVr::DrawScope stereoDraw(false);
+	for (u32 eye = 0; eye < stereoDraw.eyeCount(); ++eye) {
+		stereoDraw.selectEye(eye);
+		glDrawArrays(GLenum(_params.mode), 0, _params.verticesCount);
+	}
 }
 
 void UnbufferedDrawer::drawLine(f32 _width, SPVertex * _vertices)
@@ -194,5 +206,9 @@ void UnbufferedDrawer::drawLine(f32 _width, SPVertex * _vertices)
 	m_cachedAttribArray->enableVertexAttribArray(rectAttrib::texcoord1, false);
 
 	glLineWidth(_width);
-	glDrawArrays(GL_LINES, 0, 2);
+	QuestVr::DrawScope stereoDraw(true);
+	for (u32 eye = 0; eye < stereoDraw.eyeCount(); ++eye) {
+		stereoDraw.selectEye(eye);
+		glDrawArrays(GL_LINES, 0, 2);
+	}
 }

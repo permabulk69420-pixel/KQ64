@@ -42,6 +42,22 @@ public final class QuestVrBridge {
         }
     }
 
+    public static void configure(QuestVrSettings.Configuration configuration) {
+        if (sLibraryLoaded) {
+            nativeConfigure(configuration.stereoEnabled, configuration.ipdMeters,
+                    configuration.worldUnitsPerMeter, configuration.rotationStrength,
+                    configuration.positionEnabled, configuration.maxTranslationMeters,
+                    configuration.cameraOffsetXMeters, configuration.cameraOffsetYMeters,
+                    configuration.cameraOffsetZMeters);
+        }
+    }
+
+    public static void recenter() {
+        if (sLibraryLoaded) {
+            nativeRecenter();
+        }
+    }
+
     public static boolean renderFrame() {
         return sLibraryLoaded && nativeRenderFrame();
     }
@@ -58,6 +74,11 @@ public final class QuestVrBridge {
 
     private static native boolean nativeInitialize(Activity activity);
     private static native void nativeSetSourceTexture(int texture, int width, int height, boolean requestStereo);
+    private static native void nativeConfigure(boolean stereoEnabled, float ipdMeters,
+            float worldUnitsPerMeter, float rotationStrength, boolean positionEnabled,
+            float maxTranslationMeters, float cameraOffsetXMeters, float cameraOffsetYMeters,
+            float cameraOffsetZMeters);
+    private static native void nativeRecenter();
     private static native boolean nativeRenderFrame();
     private static native boolean nativeIsStereoSourceActive();
     private static native void nativeShutdown();

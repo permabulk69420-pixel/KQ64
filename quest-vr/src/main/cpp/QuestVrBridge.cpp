@@ -1,6 +1,3 @@
-#define XR_USE_PLATFORM_ANDROID
-#define XR_USE_GRAPHICS_API_OPENGL_ES
-
 #include <jni.h>
 #include <android/log.h>
 #include <dlfcn.h>
@@ -35,6 +32,10 @@ struct Swapchain {
 using SetVrEnabledFn = void (*)(int enabled);
 using SetVrPoseFn = void (*)(float qx, float qy, float qz, float qw,
                              float px, float py, float pz, int64_t timestamp);
+using ConfigureVrFn = void (*)(int stereoEnabled, float ipdMeters, float worldUnitsPerMeter,
+                               float rotationStrength, int positionEnabled, float maxTranslationMeters,
+                               float cameraOffsetX, float cameraOffsetY, float cameraOffsetZ);
+using RecenterVrFn = void (*)();
 
 struct State {
     JavaVM* vm{nullptr};
@@ -69,7 +70,19 @@ struct State {
 
     SetVrEnabledFn setVrEnabled{nullptr};
     SetVrPoseFn setVrPose{nullptr};
+    ConfigureVrFn configureVr{nullptr};
+    RecenterVrFn recenterVr{nullptr};
     bool rendererBridgeLogged{false};
+
+    bool configurationStereoEnabled{true};
+    float configurationIpdMeters{0.064f};
+    float configurationWorldUnitsPerMeter{64.0f};
+    float configurationRotationStrength{1.0f};
+    bool configurationPositionEnabled{false};
+    float configurationMaxTranslationMeters{0.15f};
+    float configurationCameraOffsetX{0.0f};
+    float configurationCameraOffsetY{0.0f};
+    float configurationCameraOffsetZ{0.0f};
 };
 
 State g;
@@ -184,11 +197,20 @@ void resolveRendererBridge() {
     void* symbolScope = videoPlugin != nullptr ? videoPlugin : RTLD_DEFAULT;
     g.setVrEnabled = reinterpret_cast<SetVrEnabledFn>(dlsym(symbolScope, "M64PQuestVrSetEnabled"));
     g.setVrPose = reinterpret_cast<SetVrPoseFn>(dlsym(symbolScope, "M64PQuestVrSetPose"));
+    g.configureVr = reinterpret_cast<ConfigureVrFn>(dlsym(symbolScope, "M64PQuestVrConfigure"));
+    g.recenterVr = reinterpret_cast<RecenterVrFn>(dlsym(symbolScope, "M64PQuestVrRecenter"));
 
     const bool found = g.setVrEnabled != nullptr && g.setVrPose != nullptr;
     if (found) {
-        g.setVrEnabled(g.stereoRequested ? 1 : 0);
-        g.stereoSourceActive = g.stereoRequested;
+        if (g.configureVr != nullptr) {
+            g.configureVr(g.configurationStereoEnabled ? 1 : 0, g.configurationIpdMeters,
+                          g.configurationWorldUnitsPerMeter, g.configurationRotationStrength,
+                          g.configurationPositionEnabled ? 1 : 0, g.configurationMaxTranslationMeters,
+                          g.configurationCameraOffsetX, g.configurationCameraOffsetY,
+                          g.configurationCameraOffsetZ);
+        }
+        g.setVrEnabled(1);
+        g.stereoSourceActive = g.stereoRequested && g.configurationStereoEnabled;
         LOGI("Connected OpenXR pose source to GLideN64 VR renderer bridge");
     } else if (!g.rendererBridgeLogged) {
         LOGI("GLideN64 VR bridge is not loaded yet; presenting monoscopic source until it appears");
@@ -331,6 +353,12 @@ void pollEvents() {
         } else if (header->type == XR_TYPE_EVENT_DATA_INSTANCE_LOSS_PENDING) {
             g.sessionRunning = false;
             g.exitRequested = true;
+        } else if (header->type == XR_TYPE_EVENT_DATA_REFERENCE_SPACE_CHANGE_PENDING) {
+            resolveRendererBridge();
+            if (g.recenterVr != nullptr) {
+                g.recenterVr();
+                LOGI("Recentered GLideN64 head pose after OpenXR reference-space change");
+            }
         }
         event = {XR_TYPE_EVENT_DATA_BUFFER};
     }
@@ -563,6 +591,41 @@ Java_paulscode_android_mupen64plusae_questvr_QuestVrBridge_nativeSetSourceTextur
     g.sourceHeight = height;
     g.stereoRequested = requestStereo == JNI_TRUE;
     resolveRendererBridge();
+    g.stereoSourceActive = g.setVrEnabled != nullptr && g.stereoRequested &&
+                           g.configurationStereoEnabled;
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_paulscode_android_mupen64plusae_questvr_QuestVrBridge_nativeConfigure(
+        JNIEnv*, jclass, jboolean stereoEnabled, jfloat ipdMeters,
+        jfloat worldUnitsPerMeter, jfloat rotationStrength, jboolean positionEnabled,
+        jfloat maxTranslationMeters, jfloat cameraOffsetX, jfloat cameraOffsetY,
+        jfloat cameraOffsetZ) {
+    g.configurationStereoEnabled = stereoEnabled == JNI_TRUE;
+    g.configurationIpdMeters = ipdMeters;
+    g.configurationWorldUnitsPerMeter = worldUnitsPerMeter;
+    g.configurationRotationStrength = rotationStrength;
+    g.configurationPositionEnabled = positionEnabled == JNI_TRUE;
+    g.configurationMaxTranslationMeters = maxTranslationMeters;
+    g.configurationCameraOffsetX = cameraOffsetX;
+    g.configurationCameraOffsetY = cameraOffsetY;
+    g.configurationCameraOffsetZ = cameraOffsetZ;
+    if (g.configureVr != nullptr) {
+        g.configureVr(g.configurationStereoEnabled ? 1 : 0, g.configurationIpdMeters,
+                      g.configurationWorldUnitsPerMeter, g.configurationRotationStrength,
+                      g.configurationPositionEnabled ? 1 : 0, g.configurationMaxTranslationMeters,
+                      g.configurationCameraOffsetX, g.configurationCameraOffsetY,
+                      g.configurationCameraOffsetZ);
+    }
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_paulscode_android_mupen64plusae_questvr_QuestVrBridge_nativeRecenter(
+        JNIEnv*, jclass) {
+    resolveRendererBridge();
+    if (g.recenterVr != nullptr) {
+        g.recenterVr();
+    }
 }
 
 extern "C" JNIEXPORT jboolean JNICALL

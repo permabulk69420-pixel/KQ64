@@ -10,6 +10,7 @@
 #include "RSP.h"
 #include "GBI.h"
 #include "gSP.h"
+#include "QuestVr.h"
 #include "gDP.h"
 #include "3DMath.h"
 #include "CRC.h"
@@ -767,6 +768,12 @@ void gSPClipVertex(u32 v, SPVertex * spVtx)
 	for (u32 j = 0; j < VNUM; ++j) {
 		SPVertex & vtx = spVtx[v+j];
 		vtx.clip = 0;
+		// Stereo/head rotation happens after the original CPU transform. Keep
+		// off-axis geometry for the two eye frusta and let the GPU clip it.
+		if (QuestVr::isStereoEnabled()) {
+			if (vtx.w < 0.01f) vtx.clip |= CLIP_W;
+			continue;
+		}
 		const f32 scaledX = vtx.x * scale;
 		if (scaledX > +vtx.w) vtx.clip |= CLIP_POSX;
 		if (scaledX < -vtx.w) vtx.clip |= CLIP_NEGX;

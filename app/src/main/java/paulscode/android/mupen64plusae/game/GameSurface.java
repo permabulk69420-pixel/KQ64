@@ -64,6 +64,7 @@ import static android.view.Surface.FRAME_RATE_COMPATIBILITY_DEFAULT;
 
 import paulscode.android.mupen64plusae.R;
 import paulscode.android.mupen64plusae.questvr.QuestVrBridge;
+import paulscode.android.mupen64plusae.questvr.QuestVrSettings;
 
 /**
  * Represents a graphical area of memory that can be drawn to.
@@ -712,6 +713,7 @@ public class GameSurface extends SurfaceView implements SurfaceHolder.Callback
         private long mTimeMilliseconds = 0;
         private static final int mFpsRecalPeriodFrames = 30;
         private boolean mQuestVrActive = false;
+        private QuestVrSettings.Configuration mQuestVrConfiguration;
 
         /**
          * Constructor.
@@ -733,8 +735,9 @@ public class GameSurface extends SurfaceView implements SurfaceHolder.Callback
                 mStartLock.notify();
             }
 
+            mQuestVrConfiguration = QuestVrSettings.load(mContext);
             final boolean questVrCandidate = mContext instanceof Activity &&
-                    QuestVrBridge.isDeviceCapable(mContext);
+                    mQuestVrConfiguration.enabled && QuestVrBridge.isDeviceCapable(mContext);
             final int glVersion = questVrCandidate ? 3 : 2;
             if (createGLContext(glVersion, false)) {
                 startPresentation((Activity) (questVrCandidate ? mContext : null));
@@ -763,6 +766,7 @@ public class GameSurface extends SurfaceView implements SurfaceHolder.Callback
             if (questActivity != null) {
                 mQuestVrActive = QuestVrBridge.initialize(questActivity);
                 if (mQuestVrActive) {
+                    QuestVrBridge.configure(mQuestVrConfiguration);
                     Log.i(TAG, "OpenXR presentation enabled");
                     mHandler.sendQuestVrFrame(0);
                 } else {
@@ -869,7 +873,8 @@ public class GameSurface extends SurfaceView implements SurfaceHolder.Callback
             mShaderDrawer.onSurfaceTextureAvailable(surfaceTexture, width, height);
             if (mQuestVrActive) {
                 QuestVrBridge.setSourceTexture(mShaderDrawer.getSourceTextureId(),
-                        surfaceTexture.mWidth, surfaceTexture.mHeight, true);
+                        surfaceTexture.mWidth, surfaceTexture.mHeight,
+                        mQuestVrConfiguration.stereoEnabled);
             }
 
             // Draw a single frame to prevent a black screen on rotation while game is paused

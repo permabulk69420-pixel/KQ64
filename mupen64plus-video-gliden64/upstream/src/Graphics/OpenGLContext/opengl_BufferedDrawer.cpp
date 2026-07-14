@@ -3,6 +3,7 @@
 #include "GLFunctions.h"
 #include "opengl_Attributes.h"
 #include "opengl_BufferedDrawer.h"
+#include "QuestVr.h"
 
 using namespace graphics;
 using namespace opengl;
@@ -140,7 +141,11 @@ void BufferedDrawer::drawRects(const graphics::Context::DrawRectParameters & _pa
 	m_cachedAttribArray->enableVertexAttribArray(rectAttrib::texcoord0, _params.texrect);
 	m_cachedAttribArray->enableVertexAttribArray(rectAttrib::texcoord1, _params.texrect);
 
-	glDrawArrays(GLenum(_params.mode), m_rectsBuffers.vbo.pos - _params.verticesCount, _params.verticesCount);
+	QuestVr::DrawScope stereoDraw(false);
+	for (u32 eye = 0; eye < stereoDraw.eyeCount(); ++eye) {
+		stereoDraw.selectEye(eye);
+		glDrawArrays(GLenum(_params.mode), m_rectsBuffers.vbo.pos - _params.verticesCount, _params.verticesCount);
+	}
 }
 
 void BufferedDrawer::_convertFromSPVertex(bool _flatColors, u32 _count, const SPVertex * _data)
@@ -203,40 +208,49 @@ void BufferedDrawer::drawTriangles(const graphics::Context::DrawTriangleParamete
 	if (isHWLightingAllowed())
 		glVertexAttrib1f(triangleAttrib::numlights, GLfloat(_params.vertices[0].HWLight));
 
-	if (config.frameBufferEmulation.N64DepthCompare != Config::dcCompatible) {
+	const auto draw = [&]() {
+		if (config.frameBufferEmulation.N64DepthCompare != Config::dcCompatible) {
+			if (_params.elements == nullptr) {
+				glDrawArrays(GLenum(_params.mode), m_trisBuffers.vbo.pos - _params.verticesCount, _params.verticesCount);
+				return;
+			}
+
+			glDrawRangeElementsBaseVertex(GLenum(_params.mode), 0, _params.verticesCount - 1,
+				_params.elementsCount, GL_UNSIGNED_SHORT,
+				(u16*)nullptr + m_trisBuffers.ebo.pos - _params.elementsCount,
+				m_trisBuffers.vbo.pos - _params.verticesCount);
+			return;
+		}
+
+		// Draw polygons one by one.
 		if (_params.elements == nullptr) {
-			glDrawArrays(GLenum(_params.mode), m_trisBuffers.vbo.pos - _params.verticesCount, _params.verticesCount);
+			const GLint vboStartPos = m_trisBuffers.vbo.pos - _params.verticesCount;
+			if (_params.mode != graphics::drawmode::TRIANGLES) {
+				glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT);
+				glDrawArrays(GLenum(_params.mode), m_trisBuffers.vbo.pos - _params.verticesCount, _params.verticesCount);
+				return;
+			}
+
+			for (GLint i = 0; i < GLint(_params.verticesCount); i += 3) {
+				glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT);
+				glDrawArrays(GLenum(_params.mode), vboStartPos + i, 3);
+			}
 			return;
 		}
 
-		glDrawRangeElementsBaseVertex(GLenum(_params.mode), 0, _params.verticesCount - 1, _params.elementsCount, GL_UNSIGNED_SHORT,
-			(u16*)nullptr + m_trisBuffers.ebo.pos - _params.elementsCount, m_trisBuffers.vbo.pos - _params.verticesCount);
-		return;
-	}
-
-	// Draw polygons one by one
-
-	if (_params.elements == nullptr) {
+		const GLint eboStartPos = m_trisBuffers.ebo.pos - _params.elementsCount;
 		const GLint vboStartPos = m_trisBuffers.vbo.pos - _params.verticesCount;
-		if (_params.mode != graphics::drawmode::TRIANGLES) {
+		for (GLint i = 0; i < GLint(_params.elementsCount); i += 3) {
 			glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT);
-			glDrawArrays(GLenum(_params.mode), m_trisBuffers.vbo.pos - _params.verticesCount, _params.verticesCount);
-			return;
+			glDrawRangeElementsBaseVertex(GLenum(_params.mode), i, i + 2, 3, GL_UNSIGNED_SHORT,
+				(u16*)nullptr + eboStartPos + i, vboStartPos);
 		}
+	};
 
-		for (GLint i = 0; i < GLint(_params.verticesCount); i += 3) {
-			glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT);
-			glDrawArrays(GLenum(_params.mode), vboStartPos + i, 3);
-		}
-		return;
-	}
-
-	const GLint eboStartPos = m_trisBuffers.ebo.pos - _params.elementsCount;
-	const GLint vboStartPos = m_trisBuffers.vbo.pos - _params.verticesCount;
-	for (GLint i = 0; i < GLint(_params.elementsCount); i += 3) {
-		glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT);
-		glDrawRangeElementsBaseVertex(GLenum(_params.mode), i, i + 2, 3, GL_UNSIGNED_SHORT,
-			(u16*)nullptr + eboStartPos + i, vboStartPos);
+	QuestVr::DrawScope stereoDraw(true);
+	for (u32 eye = 0; eye < stereoDraw.eyeCount(); ++eye) {
+		stereoDraw.selectEye(eye);
+		draw();
 	}
 }
 
@@ -255,5 +269,9 @@ void BufferedDrawer::drawLine(f32 _width, SPVertex * _vertices)
 	_updateBuffer(vboBuffer, 2, vboDataSize, m_vertices.data());
 
 	glLineWidth(_width);
-	glDrawArrays(GL_LINES, m_trisBuffers.vbo.pos - 2, 2);
+	QuestVr::DrawScope stereoDraw(true);
+	for (u32 eye = 0; eye < stereoDraw.eyeCount(); ++eye) {
+		stereoDraw.selectEye(eye);
+		glDrawArrays(GL_LINES, m_trisBuffers.vbo.pos - 2, 2);
+	}
 }
