@@ -56,7 +56,9 @@ jobs:
         ' \
           mupen64plus-video-gliden64/upstream/src/Graphics/OpenGLContext/GLSL/glsl_CombinerProgramBuilderCommon.cpp \
           mupen64plus-video-gliden64/upstream/src/Graphics/OpenGLContext/GLSL/glsl_CombinerProgramBuilderAccurate.cpp \
-          mupen64plus-video-gliden64/upstream/src/Graphics/OpenGLContext/GLSL/glsl_CombinerProgramBuilderFast.cpp
+          mupen64plus-video-gliden64/upstream/src/Graphics/OpenGLContext/GLSL/glsl_CombinerProgramBuilderFast.cpp \
+          mupen64plus-video-gliden64/upstream/src/Graphics/OpenGLContext/GLSL/glsl_SpecialShadersFactory.cpp \
+          mupen64plus-video-gliden64/upstream/src/Graphics/OpenGLContext/GLSL/glsl_FXAA.cpp
 
     - name: Build artifact
       run: ./gradlew assemble

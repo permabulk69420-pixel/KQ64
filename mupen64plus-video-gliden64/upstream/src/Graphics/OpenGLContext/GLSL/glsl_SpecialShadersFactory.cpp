@@ -11,6 +11,7 @@
 #include <Graphics/ShaderProgram.h>
 #include <Graphics/OpenGLContext/opengl_CachedFunctions.h>
 #include <Config.h>
+#include "QuestVr.h"
 #include "glsl_SpecialShadersFactory.h"
 #include "glsl_ShaderPart.h"
 #include "glsl_FXAA.h"
@@ -47,10 +48,14 @@ namespace glsl {
 				"IN highp vec4 aRectPosition;	\n"
 				"IN highp vec2 aTexCoord0;		\n"
 				"OUT mediump vec2 vTexCoord0;	\n"
+				"uniform lowp int uQuestVrEnabled;	\n"
+				"uniform lowp int uQuestVrEye;	\n"
 				"void main()					\n"
 				"{								\n"
 				"  gl_Position = aRectPosition;	\n"
 				"  vTexCoord0 = aTexCoord0;		\n"
+				"  if (uQuestVrEnabled != 0)	\n"
+				"    vTexCoord0.x = vTexCoord0.x * 0.5 + float(uQuestVrEye) * 0.5;	\n"
 				"}								\n"
 			;
 		}
@@ -570,7 +575,8 @@ namespace glsl {
 
 	/*---------------SpecialShader-------------*/
 
-	template<class VertexBody, class FragmentBody, class Base = graphics::ShaderProgram>
+	template<class VertexBody, class FragmentBody, class Base = graphics::ShaderProgram,
+		bool RegisterQuestVr = false>
 	class SpecialShader : public Base
 	{
 	public:
@@ -597,11 +603,15 @@ namespace glsl {
 
 			m_program =
 				graphics::ObjectHandle(Utils::createRectShaderProgram(ssVertexShader.str().data(), ssFragmentShader.str().data()));
+			if (RegisterQuestVr)
+				QuestVr::registerProgram(GLuint(m_program));
 		}
 
 		~SpecialShader()
 		{
 			m_useProgram->useProgram(graphics::ObjectHandle::null);
+			if (RegisterQuestVr)
+				QuestVr::unregisterProgram(GLuint(m_program));
 			glDeleteProgram(GLuint(m_program));
 		}
 
@@ -665,7 +675,8 @@ namespace glsl {
 
 	/*---------------FXAAShader-------------*/
 
-	typedef SpecialShader<FXAAVertexShader, FXAAFragmentShader> FXAAShaderBase;
+	typedef SpecialShader<FXAAVertexShader, FXAAFragmentShader,
+		graphics::ShaderProgram, true> FXAAShaderBase;
 
 	class FXAAShader : public FXAAShaderBase
 	{
@@ -792,7 +803,8 @@ namespace glsl {
 
 	/*---------------TexrectCopyShader-------------*/
 
-	typedef SpecialShader<VertexShaderTexturedRect, TexrectUpscaleCopy> TexrectUpscaleCopyShaderBase;
+	typedef SpecialShader<VertexShaderTexturedRect, TexrectUpscaleCopy,
+		graphics::ShaderProgram, true> TexrectUpscaleCopyShaderBase;
 
 	class TexrectUpscaleCopyShader : public TexrectUpscaleCopyShaderBase
 	{
@@ -811,7 +823,8 @@ namespace glsl {
 		}
 	};
 
-	typedef SpecialShader<VertexShaderTexturedRect, TexrectDownscaleCopy> TexrectDownscaleCopyShaderBase;
+	typedef SpecialShader<VertexShaderTexturedRect, TexrectDownscaleCopy,
+		graphics::ShaderProgram, true> TexrectDownscaleCopyShaderBase;
 
 	class TexrectDownscaleCopyShader : public TexrectDownscaleCopyShaderBase
 	{
@@ -832,7 +845,8 @@ namespace glsl {
 
 	/*---------------TexrectColorAndDepthCopyShader-------------*/
 
-	typedef SpecialShader<VertexShaderTexturedRect, TexrectColorAndDepthUpscaleCopy> TexrectColorAndDepthUpscaleCopyShaderBase;
+	typedef SpecialShader<VertexShaderTexturedRect, TexrectColorAndDepthUpscaleCopy,
+		graphics::ShaderProgram, true> TexrectColorAndDepthUpscaleCopyShaderBase;
 
 	class TexrectColorAndDepthUpscaleCopyShader : public TexrectColorAndDepthUpscaleCopyShaderBase
 	{
@@ -853,7 +867,8 @@ namespace glsl {
 		}
 	};
 
-	typedef SpecialShader<VertexShaderTexturedRect, TexrectColorAndDepthDownscaleCopy> TexrectColorAndDepthDownscaleCopyShaderBase;
+	typedef SpecialShader<VertexShaderTexturedRect, TexrectColorAndDepthDownscaleCopy,
+		graphics::ShaderProgram, true> TexrectColorAndDepthDownscaleCopyShaderBase;
 
 	class TexrectColorAndDepthDownscaleCopyShader : public TexrectColorAndDepthDownscaleCopyShaderBase
 	{
@@ -876,7 +891,8 @@ namespace glsl {
 
 	/*---------------PostProcessorShader-------------*/
 
-	typedef SpecialShader<VertexShaderTexturedRect, GammaCorrection> GammaCorrectionShaderBase;
+	typedef SpecialShader<VertexShaderTexturedRect, GammaCorrection,
+		graphics::ShaderProgram, true> GammaCorrectionShaderBase;
 
 	class GammaCorrectionShader : public GammaCorrectionShaderBase
 	{

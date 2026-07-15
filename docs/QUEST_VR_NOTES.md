@@ -18,6 +18,8 @@ The prototype currently contains:
 - monoscopic duplication of rectangle/HUD draws into both eye viewports;
 - render-target-aware eye viewport/scissor mapping for the window and emulated framebuffer objects;
 - eye-aware sampling of side-by-side framebuffer textures in rectangle and triangle passes;
+- eye-aware final framebuffer copy, gamma, depth-copy, and FXAA shader paths so each OpenXR eye
+  receives only its matching source half;
 - an experimental Quest/GLideN64-only source-width multiplier, capped to control memory and fill
   cost while a proper anisotropic per-eye render-target path is developed;
 - expanded GLideN64 CPU clipping while stereo is active;
@@ -113,6 +115,10 @@ coordinates are remapped to the active eye after the texture engine has produced
 the world-transform toggle is separate so orthographic HUD passes can remain zero disparity while
 still sampling the correct eye.
 
+GLideN64's final textured-copy and post-processing programs are registered with the same per-eye
+draw scope. Their source X coordinate is mapped into the active half before sampling. Text/font
+programs are deliberately not registered, so ordinary atlases remain full-width and unchanged.
+
 The current method assumes the projection active at draw time matches the vertices in the batch.
 That is generally true for conventional GLideN64 batches and is a practical first target for Mario
 Kart 64, but titles that mix projection matrices inside one batch may need projection IDs or retained
@@ -183,7 +189,8 @@ the OpenXR module is intentionally restricted to `arm64-v8a` for Quest.
 - `mupen64plus-video-gliden64/upstream/src/QuestVr.*`: explicit VR state/configuration and C bridge.
 - `mupen64plus-input-android/src/plugin.cpp`: thread-safe optional Touch overlay for player one.
 - GLideN64 OpenGL drawers: two-eye viewport replay without duplicate vertex uploads.
-- GLideN64 generated shaders: eye/head clip transforms and eye-aware framebuffer sampling.
+- GLideN64 generated and special shaders: eye/head clip transforms plus eye-aware framebuffer,
+  final-copy, gamma, depth-copy, and FXAA sampling.
 - GLideN64 context wrappers: render-target dimension and draw-FBO tracking for stereo mapping.
 - `gSP.cpp`: stereo-aware clipping retention.
 - `.github/workflows/build.yml`: static rejection of accidental literal escapes in generated GLSL.
@@ -197,8 +204,9 @@ the OpenXR module is intentionally restricted to `arm64-v8a` for Quest.
   kart/driver transform. Its signs and distances require Quest 3 validation and may expose the kart
   interior or game-side culling on some camera modes.
 - Game-side culling can still omit scenery exposed by large head turns or leaning.
-- Common framebuffer-backed rectangle and triangle sampling is eye-aware, but special shaders,
-  direct framebuffer blits, and unusual copy paths still need device validation.
+- Common framebuffer-backed geometry and final textured-copy/post-processing sampling are
+  eye-aware, but direct framebuffer blits and unusual subtexture copy paths still need device
+  validation.
 - Billboards still face the original game camera.
 - Sky/background passes are not yet classified separately from world geometry.
 - Rectangle HUD elements have zero disparity but are not yet submitted as an OpenXR quad layer.
