@@ -43,7 +43,7 @@ jobs:
     - name: Install build dependencies
       run: |
         sudo apt-get update
-        sudo apt-get install -y --no-install-recommends file gawk
+        sudo apt-get install -y --no-install-recommends file gawk unzip
 
     - name: Validate generated Quest VR shader literals
       run: |
@@ -62,6 +62,24 @@ jobs:
 
     - name: Build artifact
       run: ./gradlew assemble
+
+    - name: Verify Quest arm64 APK contents
+      run: |
+        apk="app/build/outputs/apk/release/Mupen64PlusAE-release.apk"
+        test -f "$apk"
+        unzip -Z1 "$apk" > /tmp/mupen64plus-ae-apk-files.txt
+        for library in \
+          lib/arm64-v8a/libmupen64plus-quest-vr.so \
+          lib/arm64-v8a/libopenxr_loader.so \
+          lib/arm64-v8a/libmupen64plus-video-GLideN64.so
+        do
+          if ! grep -Fxq "$library" /tmp/mupen64plus-ae-apk-files.txt
+          then
+            echo "Missing required Quest arm64 library: $library"
+            grep '^lib/arm64-v8a/' /tmp/mupen64plus-ae-apk-files.txt | sort
+            exit 1
+          fi
+        done
 
     - name: Declare branch name
       id: branch-name
