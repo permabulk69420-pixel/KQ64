@@ -847,7 +847,14 @@ void destroyState(JNIEnv* env) {
     g.vertexArray = 0;
 
     if (g.sessionRunning && g.session != XR_NULL_HANDLE) {
-        xrEndSession(g.session);
+        if (g.sessionState == XR_SESSION_STATE_STOPPING) {
+            xrOk(xrEndSession(g.session), "xrEndSession(shutdown)");
+        } else {
+            // Android can tear down the SurfaceView before the runtime's STOPPING event reaches
+            // this render thread. Request an orderly exit instead of calling xrEndSession from an
+            // invalid running state; xrDestroySession below remains the final synchronous cleanup.
+            xrOk(xrRequestExitSession(g.session), "xrRequestExitSession(shutdown)");
+        }
         g.sessionRunning = false;
     }
     if (g.controllerActions.actionSet != XR_NULL_HANDLE) {
