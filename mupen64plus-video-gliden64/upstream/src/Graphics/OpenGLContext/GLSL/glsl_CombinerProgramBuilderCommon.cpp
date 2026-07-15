@@ -103,7 +103,7 @@ public:
 			"      dot(uQuestVrClipRow1, questVrPosition),\n"
 			"      dot(uQuestVrClipRow2, questVrPosition),\n"
 			"      dot(uQuestVrClipRow3, questVrPosition));\n"
-			"  }\\n"
+			"  }\n"
 			"  vShadeColor = aColor;										\n"
 			"  vNumLights = aNumLights;										\n"
 			"  if ((aModify[0]) != 0.0) {									\n"

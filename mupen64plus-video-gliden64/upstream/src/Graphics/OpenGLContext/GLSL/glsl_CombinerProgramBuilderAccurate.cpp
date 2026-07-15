@@ -56,7 +56,7 @@ public:
 			"      dot(uQuestVrClipRow1, questVrPosition),\n"
 			"      dot(uQuestVrClipRow2, questVrPosition),\n"
 			"      dot(uQuestVrClipRow3, questVrPosition));\n"
-			"  }\\n"
+			"  }\n"
 			"  vShadeColor = aColor;										\n"
 			"  vec2 texCoord = aTexCoord;									\n"
 			"  texCoord *= uTexScale;										\n"

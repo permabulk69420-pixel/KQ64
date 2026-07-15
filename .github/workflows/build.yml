@@ -45,6 +45,19 @@ jobs:
         sudo apt-get update
         sudo apt-get install -y --no-install-recommends file gawk
 
+    - name: Validate generated Quest VR shader literals
+      run: |
+        perl -ne '
+          if (/(?<!\\)\\\\n"/) {
+            print "$ARGV: accidental literal \\\\n in generated GLSL: $_";
+            $bad = 1;
+          }
+          END { exit($bad ? 1 : 0); }
+        ' \
+          mupen64plus-video-gliden64/upstream/src/Graphics/OpenGLContext/GLSL/glsl_CombinerProgramBuilderCommon.cpp \
+          mupen64plus-video-gliden64/upstream/src/Graphics/OpenGLContext/GLSL/glsl_CombinerProgramBuilderAccurate.cpp \
+          mupen64plus-video-gliden64/upstream/src/Graphics/OpenGLContext/GLSL/glsl_CombinerProgramBuilderFast.cpp
+
     - name: Build artifact
       run: ./gradlew assemble
 
