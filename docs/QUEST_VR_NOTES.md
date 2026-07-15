@@ -22,6 +22,8 @@ The prototype currently contains:
   receives only its matching source half;
 - source/destination-aware direct framebuffer blits, including packed per-eye partial subtexture
   copies instead of accidentally copying only the left-eye region;
+- VR-aware retention of triangles that rejection microcodes would discard against the original
+  camera's screen box, leaving final clipping to each GPU eye transform;
 - source-frame pose association: GLideN64 records the OpenXR display-time pose consumed by the
   frame at swap, and the projection layer retains that pose for compositor reprojection;
 - an experimental Quest/GLideN64-only source-width multiplier, capped to control memory and fill

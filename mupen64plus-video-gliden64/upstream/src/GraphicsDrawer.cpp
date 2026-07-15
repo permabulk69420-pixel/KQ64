@@ -24,6 +24,7 @@
 #include "RDP.h"
 #include "VI.h"
 #include "Log.h"
+#include "QuestVr.h"
 
 using namespace graphics;
 
@@ -1715,6 +1716,13 @@ bool GraphicsDrawer::isClipped(u32 _v0, u32 _v1, u32 _v2) const
 
 bool GraphicsDrawer::isRejected(u32 _v0, u32 _v1, u32 _v2) const
 {
+	// Rejection microcodes discard a triangle as soon as one original-camera
+	// vertex leaves an expanded screen box. That decision is not valid after a
+	// late per-eye/head transform, so retain the submitted triangle for GPU
+	// clipping in VR mode.
+	if (QuestVr::isStereoEnabled())
+		return false;
+
 	if (!GBI.isRej() || gSP.clipRatio < 2)
 		return false;
 
