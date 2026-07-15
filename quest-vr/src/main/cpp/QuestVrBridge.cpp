@@ -1238,6 +1238,12 @@ Java_paulscode_android_mupen64plusae_questvr_QuestVrBridge_nativeRenderFrame(
 }
 
 extern "C" JNIEXPORT jboolean JNICALL
+Java_paulscode_android_mupen64plusae_questvr_QuestVrBridge_nativeIsExitRequested(
+        JNIEnv*, jclass) {
+    return g.exitRequested ? JNI_TRUE : JNI_FALSE;
+}
+
+extern "C" JNIEXPORT jboolean JNICALL
 Java_paulscode_android_mupen64plusae_questvr_QuestVrBridge_nativeIsStereoSourceActive(
         JNIEnv*, jclass) {
     return g.stereoSourceActive ? JNI_TRUE : JNI_FALSE;

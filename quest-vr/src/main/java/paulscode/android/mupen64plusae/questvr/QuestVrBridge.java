@@ -72,6 +72,10 @@ public final class QuestVrBridge {
         return sLibraryLoaded && nativeRenderFrame();
     }
 
+    public static boolean isExitRequested() {
+        return sLibraryLoaded && nativeIsExitRequested();
+    }
+
     public static boolean isStereoSourceActive() {
         return sLibraryLoaded && nativeIsStereoSourceActive();
     }
@@ -93,6 +97,7 @@ public final class QuestVrBridge {
             boolean touchControllerEnabled, boolean debugLogging);
     private static native void nativeRecenter();
     private static native boolean nativeRenderFrame();
+    private static native boolean nativeIsExitRequested();
     private static native boolean nativeIsStereoSourceActive();
     private static native void nativeShutdown();
 }

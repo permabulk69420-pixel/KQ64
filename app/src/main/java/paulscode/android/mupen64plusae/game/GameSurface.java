@@ -863,6 +863,12 @@ public class GameSurface extends SurfaceView implements SurfaceHolder.Callback
                 return;
             }
             final boolean submitted = QuestVrBridge.renderFrame();
+            if (!submitted && QuestVrBridge.isExitRequested()) {
+                Log.i(TAG, "OpenXR runtime requested exit; returning to Android presentation");
+                QuestVrBridge.shutdown();
+                mQuestVrActive = false;
+                return;
+            }
             mHandler.sendQuestVrFrame(submitted ? 0 : 10);
         }
 

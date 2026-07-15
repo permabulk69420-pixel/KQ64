@@ -93,6 +93,8 @@ The module uses the loader's Prefab CMake target and implements:
 - recenter propagation on OpenXR reference-space changes;
 - explicit recenter from the in-game drawer or a paired keyboard's F12 key;
 - Touch controller action sync, with both thumbsticks clicked together as an in-headset recenter;
+- runtime exit/loss propagation that stops the OpenXR frame retry loop and returns to Android
+  presentation;
 - clean resource destruction before the EGL context is destroyed.
 
 The bridge retains loader references to the resolved GLideN64 and Android input plugins until VR
@@ -200,8 +202,9 @@ GitHub Actions workflow: `.github/workflows/build.yml`
 
 Expected release APK: `app/build/outputs/apk/release/Mupen64PlusAE-release.apk`
 
-The workflow uploads that APK as its build artifact. The application already packages `arm64-v8a`;
-the OpenXR module is intentionally restricted to `arm64-v8a` for Quest.
+The workflow verifies that the release APK contains the arm64 OpenXR loader, Quest VR bridge, and
+GLideN64 plugin before uploading it as a build artifact. The application already packages
+`arm64-v8a`; the OpenXR module is intentionally restricted to `arm64-v8a` for Quest.
 
 ## Changed areas
 
