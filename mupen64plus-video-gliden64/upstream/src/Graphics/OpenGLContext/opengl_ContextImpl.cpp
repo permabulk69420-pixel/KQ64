@@ -228,6 +228,7 @@ void ContextImpl::deleteTexture(graphics::ObjectHandle _name)
 	u32 glName(_name);
 	glDeleteTextures(1, &glName);
 	m_init2DTexture->reset(_name);
+	QuestVr::unregisterTexture(glName);
 
 	m_cachedFunctions->getTexParams()->erase(u32(_name));
 }
@@ -235,6 +236,8 @@ void ContextImpl::deleteTexture(graphics::ObjectHandle _name)
 void ContextImpl::init2DTexture(const graphics::Context::InitTextureParams & _params)
 {
 	m_init2DTexture->init2DTexture(_params);
+	QuestVr::registerTexture(u32(_params.handle), static_cast<int>(_params.width),
+		static_cast<int>(_params.height));
 }
 
 void ContextImpl::update2DTexture(const graphics::Context::UpdateTextureDataParams & _params)
@@ -330,6 +333,7 @@ void ContextImpl::deleteFramebuffer(graphics::ObjectHandle _name)
 	if (fbo != 0) {
 		glDeleteFramebuffers(1, &fbo);
 		m_cachedFunctions->getCachedBindFramebuffer()->reset();
+		QuestVr::unregisterFramebuffer(fbo);
 	}
 }
 
@@ -341,6 +345,7 @@ void ContextImpl::bindFramebuffer(graphics::BufferTargetParam _target, graphics:
 		glClear(GL_DEPTH_BUFFER_BIT);
 	}
 	m_cachedFunctions->getCachedBindFramebuffer()->bind(_target, _name);
+	QuestVr::setFramebufferBinding(u32(_target), u32(_name));
 }
 
 graphics::ObjectHandle ContextImpl::createRenderbuffer()
@@ -351,16 +356,28 @@ graphics::ObjectHandle ContextImpl::createRenderbuffer()
 void ContextImpl::initRenderbuffer(const graphics::Context::InitRenderbufferParams & _params)
 {
 	m_initRenderbuffer->initRenderbuffer(_params);
+	QuestVr::registerRenderbuffer(u32(_params.handle), static_cast<int>(_params.width),
+		static_cast<int>(_params.height));
 }
 
 void ContextImpl::addFrameBufferRenderTarget(const graphics::Context::FrameBufferRenderTarget & _params)
 {
 	m_addFramebufferRenderTarget->addFrameBufferRenderTarget(_params);
+	QuestVr::registerFramebufferTarget(u32(_params.bufferHandle), u32(_params.attachment),
+		u32(_params.textureTarget), u32(_params.textureHandle));
+#ifdef OS_ANDROID
+	// GLES uses the bind-to-edit framebuffer path, so attaching a target also changes
+	// the current framebuffer binding.
+	QuestVr::setFramebufferBinding(u32(_params.bufferTarget), u32(_params.bufferHandle));
+#endif
 }
 
 bool ContextImpl::blitFramebuffers(const graphics::Context::BlitFramebuffersParams & _params)
 {
-	return m_blitFramebuffers->blitFramebuffers(_params);
+	const bool result = m_blitFramebuffers->blitFramebuffers(_params);
+	QuestVr::setFramebufferBinding(u32(graphics::bufferTarget::DRAW_FRAMEBUFFER),
+		u32(_params.drawBuffer));
+	return result;
 }
 
 void ContextImpl::setDrawBuffers(u32 _num)

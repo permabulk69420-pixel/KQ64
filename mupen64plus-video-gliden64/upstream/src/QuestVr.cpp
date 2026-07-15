@@ -9,6 +9,7 @@
 #include <unordered_map>
 
 #include "Config.h"
+#include "DisplayWindow.h"
 #include "Log.h"
 #include "gSP.h"
 #include "Graphics/OpenGLContext/GLFunctions.h"
@@ -50,8 +51,19 @@ struct Vector3 {
 
 struct ProgramUniforms {
 	GLint enabled{-1};
+	GLint transformEnabled{-1};
 	GLint eye{-1};
 	std::array<GLint, 4> rows{{-1, -1, -1, -1}};
+};
+
+struct ResourceDimensions {
+	int width{0};
+	int height{0};
+};
+
+struct FramebufferTarget {
+	GLuint resource{0};
+	bool renderbuffer{false};
 };
 
 struct RectState {
@@ -92,7 +104,11 @@ RectState s_viewport;
 RectState s_scissor;
 bool s_scissorEnabled{false};
 GLuint s_currentProgram{0};
+GLuint s_drawFramebuffer{0};
 std::unordered_map<GLuint, ProgramUniforms> s_programs;
+std::unordered_map<GLuint, ResourceDimensions> s_textureDimensions;
+std::unordered_map<GLuint, ResourceDimensions> s_renderbufferDimensions;
+std::unordered_map<GLuint, FramebufferTarget> s_framebufferTargets;
 
 struct TransformCache {
 	bool valid{false};
@@ -427,25 +443,27 @@ const std::array<float, 16>& getEyeTransform(unsigned int eye)
 void setProgramEye(unsigned int eye, bool enabled, bool transformGeometry)
 {
 	const auto program = s_programs.find(s_currentProgram);
-	if (program == s_programs.end() || program->second.enabled < 0)
+	if (program == s_programs.end())
 		return;
 	const ProgramUniforms& uniforms = program->second;
 	if (!enabled) {
-		glUniform1i(uniforms.enabled, 0);
+		if (uniforms.enabled >= 0)
+			glUniform1i(uniforms.enabled, 0);
+		if (uniforms.transformEnabled >= 0)
+			glUniform1i(uniforms.transformEnabled, 0);
 		return;
 	}
+	if (uniforms.enabled >= 0)
+		glUniform1i(uniforms.enabled, 1);
 	if (uniforms.eye >= 0)
 		glUniform1i(uniforms.eye, static_cast<GLint>(eye));
-	if (!transformGeometry) {
-		glUniform1i(uniforms.enabled, 1);
+
+	const bool applyTransform = transformGeometry &&
+		isPerspectiveProjection(reinterpret_cast<const float*>(gSP.matrix.projection));
+	if (uniforms.transformEnabled >= 0)
+		glUniform1i(uniforms.transformEnabled, applyTransform ? 1 : 0);
+	if (!applyTransform)
 		return;
-	}
-	if (!isPerspectiveProjection(reinterpret_cast<const float*>(gSP.matrix.projection))) {
-		// Keep orthographic and unusual screen-space triangle passes at zero disparity. They are
-		// still duplicated into both eye viewports, like rectangle HUD elements.
-		glUniform1i(uniforms.enabled, 0);
-		return;
-	}
 
 	const std::array<float, 16>& matrix = getEyeTransform(eye);
 	for (int row = 0; row < 4; ++row) {
@@ -454,7 +472,6 @@ void setProgramEye(unsigned int eye, bool enabled, bool transformGeometry)
 				matrix[8 + row], matrix[12 + row]);
 		}
 	}
-	glUniform1i(uniforms.enabled, 1);
 }
 
 int mapCoordinate(int value, int sourceOrigin, int sourceSize, int targetOrigin, int targetSize)
@@ -463,6 +480,22 @@ int mapCoordinate(int value, int sourceOrigin, int sourceSize, int targetOrigin,
 		return targetOrigin;
 	return targetOrigin + static_cast<int>(std::floor(
 		static_cast<double>(value - sourceOrigin) * targetSize / sourceSize));
+}
+
+int getDrawTargetWidth()
+{
+	if (s_drawFramebuffer == 0)
+		return static_cast<int>(dwnd().getScreenWidth());
+
+	const auto target = s_framebufferTargets.find(s_drawFramebuffer);
+	if (target == s_framebufferTargets.end())
+		return static_cast<int>(dwnd().getScreenWidth());
+	const auto& dimensions = target->second.renderbuffer
+		? s_renderbufferDimensions : s_textureDimensions;
+	const auto resource = dimensions.find(target->second.resource);
+	if (resource == dimensions.end())
+		return static_cast<int>(dwnd().getScreenWidth());
+	return resource->second.width;
 }
 
 } // namespace
@@ -479,6 +512,7 @@ void registerProgram(unsigned int program)
 {
 	ProgramUniforms uniforms;
 	uniforms.enabled = glGetUniformLocation(program, "uQuestVrEnabled");
+	uniforms.transformEnabled = glGetUniformLocation(program, "uQuestVrTransformEnabled");
 	uniforms.eye = glGetUniformLocation(program, "uQuestVrEye");
 	uniforms.rows[0] = glGetUniformLocation(program, "uQuestVrClipRow0");
 	uniforms.rows[1] = glGetUniformLocation(program, "uQuestVrClipRow1");
@@ -497,6 +531,44 @@ void unregisterProgram(unsigned int program)
 void setCurrentProgram(unsigned int program)
 {
 	s_currentProgram = program;
+}
+
+void registerTexture(unsigned int texture, int width, int height)
+{
+	if (texture != 0 && width > 0 && height > 0)
+		s_textureDimensions[texture] = {width, height};
+}
+
+void unregisterTexture(unsigned int texture)
+{
+	s_textureDimensions.erase(texture);
+}
+
+void registerRenderbuffer(unsigned int renderbuffer, int width, int height)
+{
+	if (renderbuffer != 0 && width > 0 && height > 0)
+		s_renderbufferDimensions[renderbuffer] = {width, height};
+}
+
+void registerFramebufferTarget(unsigned int framebuffer, unsigned int attachment,
+	unsigned int target, unsigned int resource)
+{
+	if (framebuffer == 0 || attachment != GL_COLOR_ATTACHMENT0)
+		return;
+	s_framebufferTargets[framebuffer] = {resource, target == GL_RENDERBUFFER};
+}
+
+void unregisterFramebuffer(unsigned int framebuffer)
+{
+	s_framebufferTargets.erase(framebuffer);
+	if (s_drawFramebuffer == framebuffer)
+		s_drawFramebuffer = 0;
+}
+
+void setFramebufferBinding(unsigned int target, unsigned int framebuffer)
+{
+	if (target == GL_FRAMEBUFFER || target == GL_DRAW_FRAMEBUFFER)
+		s_drawFramebuffer = framebuffer;
 }
 
 void setViewport(int x, int y, int width, int height)
@@ -520,13 +592,19 @@ void resetGraphicsState()
 	s_scissor = {};
 	s_scissorEnabled = false;
 	s_currentProgram = 0;
+	s_drawFramebuffer = 0;
+	s_textureDimensions.clear();
+	s_renderbufferDimensions.clear();
+	s_framebufferTargets.clear();
 	s_transformCache.valid = false;
 }
 
 DrawScope::DrawScope(bool transformGeometry)
 	: m_active(isStereoEnabled() && s_viewport.width >= 2 && s_viewport.height > 0)
 	, m_transformGeometry(transformGeometry)
+	, m_targetWidth(getDrawTargetWidth())
 {
+	m_active = m_active && m_targetWidth >= 2;
 	if (m_active) {
 		if (m_transformGeometry)
 			s_geometryDraws.fetch_add(1, std::memory_order_relaxed);
@@ -556,17 +634,24 @@ void DrawScope::selectEye(unsigned int eye)
 		return;
 	s_eyeDraws.fetch_add(1, std::memory_order_relaxed);
 
-	const int leftWidth = s_viewport.width / 2;
-	const int eyeWidth = eye == 0 ? leftWidth : s_viewport.width - leftWidth;
-	const int eyeX = eye == 0 ? s_viewport.x : s_viewport.x + leftWidth;
-	glViewport(eyeX, s_viewport.y, eyeWidth, s_viewport.height);
+	const int leftTargetWidth = m_targetWidth / 2;
+	const int eyeTargetX = eye == 0 ? 0 : leftTargetWidth;
+	const int eyeTargetWidth = eye == 0 ? leftTargetWidth : m_targetWidth - leftTargetWidth;
+	const int viewportStart = mapCoordinate(s_viewport.x, 0, m_targetWidth,
+		eyeTargetX, eyeTargetWidth);
+	const int viewportEnd = mapCoordinate(s_viewport.x + s_viewport.width, 0, m_targetWidth,
+		eyeTargetX, eyeTargetWidth);
+	glViewport(viewportStart, s_viewport.y, viewportEnd - viewportStart, s_viewport.height);
 
 	if (s_scissorEnabled) {
-		const int mappedStart = mapCoordinate(s_scissor.x, s_viewport.x, s_viewport.width, eyeX, eyeWidth);
-		const int mappedEnd = mapCoordinate(s_scissor.x + s_scissor.width, s_viewport.x,
-			s_viewport.width, eyeX, eyeWidth);
-		const int clampedStart = std::max(eyeX, std::min(eyeX + eyeWidth, mappedStart));
-		const int clampedEnd = std::max(clampedStart, std::min(eyeX + eyeWidth, mappedEnd));
+		const int mappedStart = mapCoordinate(s_scissor.x, 0, m_targetWidth,
+			eyeTargetX, eyeTargetWidth);
+		const int mappedEnd = mapCoordinate(s_scissor.x + s_scissor.width, 0,
+			m_targetWidth, eyeTargetX, eyeTargetWidth);
+		const int clampedStart = std::max(eyeTargetX,
+			std::min(eyeTargetX + eyeTargetWidth, mappedStart));
+		const int clampedEnd = std::max(clampedStart,
+			std::min(eyeTargetX + eyeTargetWidth, mappedEnd));
 		glScissor(clampedStart, s_scissor.y, clampedEnd - clampedStart, s_scissor.height);
 	}
 

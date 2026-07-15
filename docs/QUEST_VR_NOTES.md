@@ -16,6 +16,8 @@ The prototype currently contains:
   `N64 projection * VR view * inverse(N64 projection)`;
 - runtime eye positions and asymmetric OpenXR FOV terms applied to perspective world projections;
 - monoscopic duplication of rectangle/HUD draws into both eye viewports;
+- render-target-aware eye viewport/scissor mapping for the window and emulated framebuffer objects;
+- eye-aware sampling of side-by-side framebuffer textures in rectangle and triangle passes;
 - expanded GLideN64 CPU clipping while stereo is active;
 - an OpenXR Touch action-set fallback merged with the normal player-one controller state;
 - a Mario Kart 64 profile using GLideN64's existing `hack_MK64` ROM identification, with a modest
@@ -100,6 +102,15 @@ on the CPU, and vertex-buffer uploads. View-dependent rasterization is duplicate
 is relaxed in VR mode so geometry needed by an off-axis eye is less likely to be discarded before
 the GPU sees it.
 
+GLideN64's raw GL viewport is intentionally larger than the physical render target because its
+generated shaders convert N64 pixel coordinates through a fixed virtual screen. The stereo mapper
+therefore tracks texture/renderbuffer attachments and the current draw FBO, then maps the original
+viewport and scissor from the real target width into each target half. Simply halving the raw
+viewport would place the right eye outside common framebuffer sizes. Framebuffer-backed texture
+coordinates are remapped to the active eye after the texture engine has produced final coordinates;
+the world-transform toggle is separate so orthographic HUD passes can remain zero disparity while
+still sampling the correct eye.
+
 The current method assumes the projection active at draw time matches the vertices in the batch.
 That is generally true for conventional GLideN64 batches and is a practical first target for Mario
 Kart 64, but titles that mix projection matrices inside one batch may need projection IDs or retained
@@ -163,8 +174,10 @@ the OpenXR module is intentionally restricted to `arm64-v8a` for Quest.
 - `mupen64plus-video-gliden64/upstream/src/QuestVr.*`: explicit VR state/configuration and C bridge.
 - `mupen64plus-input-android/src/plugin.cpp`: thread-safe optional Touch overlay for player one.
 - GLideN64 OpenGL drawers: two-eye viewport replay without duplicate vertex uploads.
-- GLideN64 generated triangle shaders: eye/head clip transforms.
+- GLideN64 generated shaders: eye/head clip transforms and eye-aware framebuffer sampling.
+- GLideN64 context wrappers: render-target dimension and draw-FBO tracking for stereo mapping.
 - `gSP.cpp`: stereo-aware clipping retention.
+- `.github/workflows/build.yml`: static rejection of accidental literal escapes in generated GLSL.
 
 ## Known limitations and risks
 
@@ -175,8 +188,8 @@ the OpenXR module is intentionally restricted to `arm64-v8a` for Quest.
   kart/driver transform. Its signs and distances require Quest 3 validation and may expose the kart
   interior or game-side culling on some camera modes.
 - Game-side culling can still omit scenery exposed by large head turns or leaning.
-- Full-screen framebuffer texture effects may sample the complete side-by-side buffer and need
-  eye-aware UV cropping.
+- Common framebuffer-backed rectangle and triangle sampling is eye-aware, but special shaders,
+  direct framebuffer blits, and unusual copy paths still need device validation.
 - Billboards still face the original game camera.
 - Sky/background passes are not yet classified separately from world geometry.
 - Rectangle HUD elements have zero disparity but are not yet submitted as an OpenXR quad layer.
@@ -205,8 +218,10 @@ the OpenXR module is intentionally restricted to `arm64-v8a` for Quest.
 ## Next implementation steps
 
 1. Fix all CI compiler/linker findings and retain a downloadable APK at every checkpoint.
-2. Add eye-aware sampling for framebuffer-backed texture rectangles and final post-processing passes.
-3. Pass OpenXR eye FOV into GLideN64 and build asymmetric per-eye projection corrections.
+2. Validate the target-aware SBS layout and framebuffer sampling on Quest 3, including menus,
+   countdowns, transitions, and Mario Kart's framebuffer effects.
+3. Add frame timing and render-target diagnostics, then select a higher per-eye source resolution
+   that remains within Quest 3 performance limits.
 4. Refine the Mario Kart 64 Z-buffer/projection heuristic from device captures, then identify a
    stable kart/driver-relative transform for an optional first-person profile.
 5. Add a visible immersive debug overlay with pose, eye matrices, draw counts, and frame timings.

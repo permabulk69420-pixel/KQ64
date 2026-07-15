@@ -31,6 +31,7 @@ public:
 			"uniform mediump vec2 uAdjustTrans;					\n"
 			"uniform mediump vec2 uAdjustScale;					\n"
 			"uniform lowp int uQuestVrEnabled;\n"
+			"uniform lowp int uQuestVrTransformEnabled;\n"
 			"uniform highp vec4 uQuestVrClipRow0;\n"
 			"uniform highp vec4 uQuestVrClipRow1;\n"
 			"uniform highp vec4 uQuestVrClipRow2;\n"
@@ -50,7 +51,7 @@ public:
 			"void main()													\n"
 			"{																\n"
 			"  gl_Position = aPosition;										\n"
-			"  if (uQuestVrEnabled != 0 && aModify[0] == 0.0) {\n"
+			"  if (uQuestVrTransformEnabled != 0 && aModify[0] == 0.0) {\n"
 			"    highp vec4 questVrPosition = gl_Position;\n"
 			"    gl_Position = vec4(dot(uQuestVrClipRow0, questVrPosition),\n"
 			"      dot(uQuestVrClipRow1, questVrPosition),\n"
@@ -184,6 +185,10 @@ public:
 			"uniform highp vec2 uCacheOffset[2];	\n"
 			"uniform lowp int uUseTexCoordBounds;	\n"
 			"uniform highp vec4 uTexCoordBounds;	\n"
+			"uniform lowp int uQuestVrEnabled;	\n"
+			"uniform lowp int uQuestVrEye;	\n"
+			"uniform lowp ivec2 uCacheFrameBuffer;	\n"
+			"uniform highp vec2 uQuestVrTextureSize;	\n"
 			"uniform lowp int uScreenSpaceTriangle;	\n"
 			"highp vec2 texCoord0;					\n"
 			"highp vec2 texCoord1;					\n"
@@ -1191,6 +1196,13 @@ public:
 	{
 		m_part =
 			"textureEngine0(mTexCoord, tcData0); \n"
+			"if (uQuestVrEnabled != 0 && uCacheFrameBuffer.x != 0) { \n"
+			"  highp float questVrEyeOffset = float(uQuestVrEye) * 0.5 * uQuestVrTextureSize.x; \n"
+			"  tcData0[0].x = tcData0[0].x * 0.5 + questVrEyeOffset; \n"
+			"  tcData0[1].x = tcData0[1].x * 0.5 + questVrEyeOffset; \n"
+			"  tcData0[2].x = tcData0[2].x * 0.5 + questVrEyeOffset; \n"
+			"  tcData0[3].x = tcData0[3].x * 0.5 + questVrEyeOffset; \n"
+			"} \n"
 			;
 	}
 };
@@ -1201,6 +1213,13 @@ public:
 	{
 		m_part =
 			"textureEngine1(mTexCoord, tcData1); \n"
+			"if (uQuestVrEnabled != 0 && uCacheFrameBuffer.y != 0) { \n"
+			"  highp float questVrEyeOffset = float(uQuestVrEye) * 0.5 * uQuestVrTextureSize.y; \n"
+			"  tcData1[0].x = tcData1[0].x * 0.5 + questVrEyeOffset; \n"
+			"  tcData1[1].x = tcData1[1].x * 0.5 + questVrEyeOffset; \n"
+			"  tcData1[2].x = tcData1[2].x * 0.5 + questVrEyeOffset; \n"
+			"  tcData1[3].x = tcData1[3].x * 0.5 + questVrEyeOffset; \n"
+			"} \n"
 			;
 	}
 };
