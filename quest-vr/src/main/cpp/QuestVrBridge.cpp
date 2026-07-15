@@ -113,6 +113,8 @@ struct State {
     GetVrStatsFn getVrStats{nullptr};
     GetPresentedPoseTimestampFn getPresentedPoseTimestamp{nullptr};
     SetVrInputFn setVrInput{nullptr};
+    void* rendererLibraryHandle{nullptr};
+    void* inputLibraryHandle{nullptr};
     bool rendererBridgeLogged{false};
     bool inputBridgeLogged{false};
 
@@ -384,6 +386,11 @@ void resolveRendererBridge() {
 
     const bool found = g.setVrEnabled != nullptr && g.setVrPose != nullptr;
     if (found) {
+        // Keep the plugin mapped until destroyState has disabled VR. The core may unload its
+        // reference first during activity/surface teardown, which would otherwise leave these
+        // function pointers dangling.
+        g.rendererLibraryHandle = videoPlugin;
+        videoPlugin = nullptr;
         if (g.configureVr != nullptr) {
             g.configureVr(g.configurationStereoEnabled ? 1 : 0, g.configurationIpdMeters,
                           g.configurationWorldUnitsPerMeter, g.configurationRotationStrength,
@@ -416,6 +423,8 @@ void resolveInputBridge() {
     void* symbolScope = inputPlugin != nullptr ? inputPlugin : RTLD_DEFAULT;
     g.setVrInput = reinterpret_cast<SetVrInputFn>(dlsym(symbolScope, "M64PQuestVrSetInput"));
     if (g.setVrInput != nullptr) {
+        g.inputLibraryHandle = inputPlugin;
+        inputPlugin = nullptr;
         LOGI("Connected OpenXR Touch actions to Android N64 input overlay");
     } else if (!g.inputBridgeLogged) {
         LOGI("Android input plugin is not loaded yet; Touch input will be retried");
@@ -820,6 +829,14 @@ void destroyState(JNIEnv* env) {
     }
     if (g.setVrInput != nullptr) {
         g.setVrInput(0, 0, 0.0f, 0.0f);
+    }
+    if (g.rendererLibraryHandle != nullptr) {
+        dlclose(g.rendererLibraryHandle);
+        g.rendererLibraryHandle = nullptr;
+    }
+    if (g.inputLibraryHandle != nullptr) {
+        dlclose(g.inputLibraryHandle);
+        g.inputLibraryHandle = nullptr;
     }
 
     if (g.program != 0) glDeleteProgram(g.program);

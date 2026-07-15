@@ -95,6 +95,10 @@ The module uses the loader's Prefab CMake target and implements:
 - Touch controller action sync, with both thumbsticks clicked together as an in-headset recenter;
 - clean resource destruction before the EGL context is destroyed.
 
+The bridge retains loader references to the resolved GLideN64 and Android input plugins until VR
+shutdown, so activity or surface teardown cannot leave cleanup callbacks pointing into an unloaded
+native library.
+
 The OpenXR layer currently samples the emulator's external-OES texture into each eye swapchain. A
 GLideN64 stereo source uses the left or right half. Other plugins remain monoscopic and are aspect
 fitted into both views.
