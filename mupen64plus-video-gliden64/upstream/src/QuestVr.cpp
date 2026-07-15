@@ -8,6 +8,7 @@
 #include <cstring>
 #include <unordered_map>
 
+#include "Config.h"
 #include "Log.h"
 #include "gSP.h"
 #include "Graphics/OpenGLContext/GLFunctions.h"
@@ -65,6 +66,8 @@ std::atomic<bool> s_stereoEnabled{true};
 std::atomic<bool> s_positionEnabled{false};
 std::atomic<bool> s_useOpenXrFov{true};
 std::atomic<bool> s_haveRuntimeViews{false};
+std::atomic<bool> s_marioKartProfileEnabled{true};
+std::atomic<bool> s_marioKartProfileLogged{false};
 std::atomic<bool> s_haveRecenterPose{false};
 std::atomic<bool> s_recenterRequested{true};
 std::atomic<float> s_ipdMeters{0.064f};
@@ -74,6 +77,8 @@ std::atomic<float> s_maxTranslationMeters{0.15f};
 std::atomic<float> s_cameraOffsetX{0.0f};
 std::atomic<float> s_cameraOffsetY{0.0f};
 std::atomic<float> s_cameraOffsetZ{0.0f};
+std::atomic<float> s_marioKartCameraOffsetY{-0.20f};
+std::atomic<float> s_marioKartCameraOffsetZ{-0.75f};
 std::atomic<unsigned int> s_poseGeneration{1};
 std::atomic<unsigned int> s_configGeneration{1};
 std::atomic<unsigned int> s_geometryDraws{0};
@@ -272,6 +277,11 @@ void quaternionMatrix(const Quaternion& q, float* matrix)
 	matrix[10] = 1.0f - 2.0f * (xx + yy);
 }
 
+bool isPerspectiveProjection(const float* projection)
+{
+	return std::abs(projection[11]) >= 0.5f && std::abs(projection[15]) <= 0.001f;
+}
+
 void applyRuntimeProjection(unsigned int eye, float* projection)
 {
 	if (!s_useOpenXrFov.load(std::memory_order_relaxed) ||
@@ -281,7 +291,7 @@ void applyRuntimeProjection(unsigned int eye, float* projection)
 	// GLideN64 projection matrices use OpenGL column-major layout. Only replace the angular
 	// terms for perspective world draws; retain the game's depth mapping and leave orthographic
 	// HUD/background projections alone.
-	if (std::abs(projection[11]) < 0.5f || std::abs(projection[15]) > 0.001f)
+	if (!isPerspectiveProjection(projection))
 		return;
 	const AtomicView& view = s_runtimeViews[std::min(eye, 1U)];
 	const float tanLeft = std::tan(view.angleLeft.load(std::memory_order_relaxed));
@@ -347,10 +357,21 @@ void buildEyeTransform(unsigned int eye, const float* projection, float* destina
 		eyeOffset = rotate(headOrientation,
 			{eyeSign * s_ipdMeters.load(std::memory_order_relaxed), 0.0f, 0.0f});
 	}
+	float profileOffsetY = 0.0f;
+	float profileOffsetZ = 0.0f;
+	const bool marioKartWorldPass = s_marioKartProfileEnabled.load(std::memory_order_relaxed) &&
+		(config.generalEmulation.hacks & hack_MK64) != 0 &&
+		(gSP.geometryMode & G_ZBUFFER) != 0;
+	if (marioKartWorldPass) {
+		if (!s_marioKartProfileLogged.exchange(true, std::memory_order_relaxed))
+			LOG(LOG_MINIMAL, "Quest VR Mario Kart 64 close-chase profile active");
+		profileOffsetY = s_marioKartCameraOffsetY.load(std::memory_order_relaxed);
+		profileOffsetZ = s_marioKartCameraOffsetZ.load(std::memory_order_relaxed);
+	}
 	const Vector3 localCameraOffset{
 		s_cameraOffsetX.load(std::memory_order_relaxed),
-		s_cameraOffsetY.load(std::memory_order_relaxed),
-		s_cameraOffsetZ.load(std::memory_order_relaxed),
+		s_cameraOffsetY.load(std::memory_order_relaxed) + profileOffsetY,
+		s_cameraOffsetZ.load(std::memory_order_relaxed) + profileOffsetZ,
 	};
 	const Vector3 rotatedCameraOffset = rotate(headOrientation, localCameraOffset);
 	const float worldScale = std::max(0.001f, s_worldUnitsPerMeter.load(std::memory_order_relaxed));
@@ -417,6 +438,12 @@ void setProgramEye(unsigned int eye, bool enabled, bool transformGeometry)
 		glUniform1i(uniforms.eye, static_cast<GLint>(eye));
 	if (!transformGeometry) {
 		glUniform1i(uniforms.enabled, 1);
+		return;
+	}
+	if (!isPerspectiveProjection(reinterpret_cast<const float*>(gSP.matrix.projection))) {
+		// Keep orthographic and unusual screen-space triangle passes at zero disparity. They are
+		// still duplicated into both eye viewports, like rectangle HUD elements.
+		glUniform1i(uniforms.enabled, 0);
 		return;
 	}
 
@@ -557,8 +584,11 @@ void DrawScope::selectEye(unsigned int eye)
 extern "C" QUEST_VR_EXPORT void M64PQuestVrSetEnabled(int enabled)
 {
 	s_enabled.store(enabled != 0, std::memory_order_release);
-	if (enabled != 0)
+	if (enabled != 0) {
 		s_recenterRequested.store(true, std::memory_order_release);
+		s_haveRuntimeViews.store(false, std::memory_order_release);
+		s_marioKartProfileLogged.store(false, std::memory_order_relaxed);
+	}
 	s_configGeneration.fetch_add(1, std::memory_order_release);
 	LOG(LOG_MINIMAL, "Quest VR geometry path %s", enabled != 0 ? "enabled" : "disabled");
 }
@@ -605,7 +635,8 @@ extern "C" QUEST_VR_EXPORT void M64PQuestVrSetViews(
 extern "C" QUEST_VR_EXPORT void M64PQuestVrConfigure(int stereoEnabled, float ipdMeters,
 	float worldUnitsPerMeter, float rotationStrength, int positionEnabled,
 	float maxTranslationMeters, float cameraOffsetX, float cameraOffsetY, float cameraOffsetZ,
-	int useOpenXrFov)
+	int useOpenXrFov, int marioKartProfileEnabled,
+	float marioKartCameraOffsetY, float marioKartCameraOffsetZ)
 {
 	s_stereoEnabled.store(stereoEnabled != 0, std::memory_order_relaxed);
 	s_ipdMeters.store(std::max(0.0f, ipdMeters), std::memory_order_relaxed);
@@ -617,6 +648,9 @@ extern "C" QUEST_VR_EXPORT void M64PQuestVrConfigure(int stereoEnabled, float ip
 	s_cameraOffsetY.store(cameraOffsetY, std::memory_order_relaxed);
 	s_cameraOffsetZ.store(cameraOffsetZ, std::memory_order_relaxed);
 	s_useOpenXrFov.store(useOpenXrFov != 0, std::memory_order_relaxed);
+	s_marioKartProfileEnabled.store(marioKartProfileEnabled != 0, std::memory_order_relaxed);
+	s_marioKartCameraOffsetY.store(marioKartCameraOffsetY, std::memory_order_relaxed);
+	s_marioKartCameraOffsetZ.store(marioKartCameraOffsetZ, std::memory_order_relaxed);
 	s_configGeneration.fetch_add(1, std::memory_order_release);
 }
 

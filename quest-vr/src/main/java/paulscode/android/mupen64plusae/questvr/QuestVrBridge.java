@@ -49,6 +49,9 @@ public final class QuestVrBridge {
                     configuration.positionEnabled, configuration.maxTranslationMeters,
                     configuration.cameraOffsetXMeters, configuration.cameraOffsetYMeters,
                     configuration.cameraOffsetZMeters, configuration.useOpenXrFov,
+                    configuration.marioKartProfileEnabled,
+                    configuration.marioKartCameraOffsetYMeters,
+                    configuration.marioKartCameraOffsetZMeters,
                     configuration.touchControllerEnabled, configuration.debugLogging);
         }
     }
@@ -78,8 +81,9 @@ public final class QuestVrBridge {
     private static native void nativeConfigure(boolean stereoEnabled, float ipdMeters,
             float worldUnitsPerMeter, float rotationStrength, boolean positionEnabled,
             float maxTranslationMeters, float cameraOffsetXMeters, float cameraOffsetYMeters,
-            float cameraOffsetZMeters, boolean useOpenXrFov, boolean touchControllerEnabled,
-            boolean debugLogging);
+            float cameraOffsetZMeters, boolean useOpenXrFov, boolean marioKartProfileEnabled,
+            float marioKartCameraOffsetYMeters, float marioKartCameraOffsetZMeters,
+            boolean touchControllerEnabled, boolean debugLogging);
     private static native void nativeRecenter();
     private static native boolean nativeRenderFrame();
     private static native boolean nativeIsStereoSourceActive();

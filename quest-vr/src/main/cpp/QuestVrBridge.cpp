@@ -42,7 +42,8 @@ using SetVrViewsFn = void (*)(float leftPx, float leftPy, float leftPz,
 using ConfigureVrFn = void (*)(int stereoEnabled, float ipdMeters, float worldUnitsPerMeter,
                                float rotationStrength, int positionEnabled, float maxTranslationMeters,
                                float cameraOffsetX, float cameraOffsetY, float cameraOffsetZ,
-                               int useOpenXrFov);
+                               int useOpenXrFov, int marioKartProfileEnabled,
+                               float marioKartCameraOffsetY, float marioKartCameraOffsetZ);
 using RecenterVrFn = void (*)();
 using GetVrStatsFn = void (*)(uint32_t* geometryDraws, uint32_t* rectangleDraws,
                               uint32_t* eyeDraws, uint32_t* poseGeneration);
@@ -118,6 +119,9 @@ struct State {
     float configurationCameraOffsetY{0.0f};
     float configurationCameraOffsetZ{0.0f};
     bool configurationUseOpenXrFov{true};
+    bool configurationMarioKartProfileEnabled{true};
+    float configurationMarioKartCameraOffsetY{-0.20f};
+    float configurationMarioKartCameraOffsetZ{-0.75f};
     bool touchControllerEnabled{true};
     bool debugLogging{false};
     uint32_t submittedFrameCount{0};
@@ -357,7 +361,10 @@ void resolveRendererBridge() {
                           g.configurationWorldUnitsPerMeter, g.configurationRotationStrength,
                           g.configurationPositionEnabled ? 1 : 0, g.configurationMaxTranslationMeters,
                           g.configurationCameraOffsetX, g.configurationCameraOffsetY,
-                          g.configurationCameraOffsetZ, g.configurationUseOpenXrFov ? 1 : 0);
+                          g.configurationCameraOffsetZ, g.configurationUseOpenXrFov ? 1 : 0,
+                          g.configurationMarioKartProfileEnabled ? 1 : 0,
+                          g.configurationMarioKartCameraOffsetY,
+                          g.configurationMarioKartCameraOffsetZ);
         }
         g.setVrEnabled(1);
         g.stereoSourceActive = g.stereoRequested && g.configurationStereoEnabled;
@@ -925,8 +932,9 @@ Java_paulscode_android_mupen64plusae_questvr_QuestVrBridge_nativeConfigure(
         JNIEnv*, jclass, jboolean stereoEnabled, jfloat ipdMeters,
         jfloat worldUnitsPerMeter, jfloat rotationStrength, jboolean positionEnabled,
         jfloat maxTranslationMeters, jfloat cameraOffsetX, jfloat cameraOffsetY,
-        jfloat cameraOffsetZ, jboolean useOpenXrFov, jboolean touchControllerEnabled,
-        jboolean debugLogging) {
+        jfloat cameraOffsetZ, jboolean useOpenXrFov, jboolean marioKartProfileEnabled,
+        jfloat marioKartCameraOffsetY, jfloat marioKartCameraOffsetZ,
+        jboolean touchControllerEnabled, jboolean debugLogging) {
     g.configurationStereoEnabled = stereoEnabled == JNI_TRUE;
     g.configurationIpdMeters = ipdMeters;
     g.configurationWorldUnitsPerMeter = worldUnitsPerMeter;
@@ -937,6 +945,9 @@ Java_paulscode_android_mupen64plusae_questvr_QuestVrBridge_nativeConfigure(
     g.configurationCameraOffsetY = cameraOffsetY;
     g.configurationCameraOffsetZ = cameraOffsetZ;
     g.configurationUseOpenXrFov = useOpenXrFov == JNI_TRUE;
+    g.configurationMarioKartProfileEnabled = marioKartProfileEnabled == JNI_TRUE;
+    g.configurationMarioKartCameraOffsetY = marioKartCameraOffsetY;
+    g.configurationMarioKartCameraOffsetZ = marioKartCameraOffsetZ;
     g.touchControllerEnabled = touchControllerEnabled == JNI_TRUE;
     g.debugLogging = debugLogging == JNI_TRUE;
     if (g.configureVr != nullptr) {
@@ -944,7 +955,10 @@ Java_paulscode_android_mupen64plusae_questvr_QuestVrBridge_nativeConfigure(
                       g.configurationWorldUnitsPerMeter, g.configurationRotationStrength,
                       g.configurationPositionEnabled ? 1 : 0, g.configurationMaxTranslationMeters,
                       g.configurationCameraOffsetX, g.configurationCameraOffsetY,
-                      g.configurationCameraOffsetZ, g.configurationUseOpenXrFov ? 1 : 0);
+                      g.configurationCameraOffsetZ, g.configurationUseOpenXrFov ? 1 : 0,
+                      g.configurationMarioKartProfileEnabled ? 1 : 0,
+                      g.configurationMarioKartCameraOffsetY,
+                      g.configurationMarioKartCameraOffsetZ);
     }
 }
 

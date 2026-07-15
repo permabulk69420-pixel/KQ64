@@ -18,6 +18,8 @@ The prototype currently contains:
 - monoscopic duplication of rectangle/HUD draws into both eye viewports;
 - expanded GLideN64 CPU clipping while stereo is active;
 - an OpenXR Touch action-set fallback merged with the normal player-one controller state;
+- a Mario Kart 64 profile using GLideN64's existing `hack_MK64` ROM identification, with a modest
+  close-chase offset restricted to perspective passes that advertise N64 Z-buffering;
 - automatic fallback to the existing Android presentation path when no VR headset/runtime is present.
 
 This is native stereo geometry work, not a completed-frame texture copied to both eyes. The OpenXR
@@ -88,9 +90,10 @@ The prototype therefore works at the final GL draw boundary:
 3. A generated vertex-shader uniform applies a different clip transform for each eye before the
    existing N64 viewport and screen conversion.
 4. The transform reconstructs view space with the inverse active N64 projection, applies recentered
-   headset rotation, eye offset, optional limited translation, and then reapplies the N64 projection.
-5. Rectangle draws are duplicated without the world transform, keeping common HUD/2D elements at
-   zero disparity for the initial build.
+   headset rotation, runtime eye offset, optional limited translation, and then applies an eye-FOV
+   projection while preserving the game's depth mapping.
+5. Rectangle, screen-modified, and orthographic triangle draws are duplicated without the world
+   transform, keeping common HUD/2D elements at zero disparity for the initial build.
 
 This shares display-list interpretation, texture decoding/uploads, lighting work already performed
 on the CPU, and vertex-buffer uploads. View-dependent rasterization is duplicated. CPU X/Y clipping
@@ -125,6 +128,9 @@ Developer settings are stored in Android shared preferences named `quest_vr`. De
 | `hud_mode` | `monoscopic_overlay` | Documents the current zero-disparity HUD policy |
 | `culling_expansion` | `1.25` | Reserved for a graduated clipping policy |
 | `use_openxr_fov` | `true` | Replaces perspective angular terms with each runtime eye FOV |
+| `mario_kart_profile_enabled` | `true` | Enables the title-scoped close-chase experiment |
+| `mario_kart_camera_offset_y_meters` | `-0.20` | Lowers the tracked camera for MK64 Z-buffered world passes |
+| `mario_kart_camera_offset_z_meters` | `-0.75` | Moves the tracked camera toward the kart for MK64 world passes |
 | `touch_controller_enabled` | `true` | Merges OpenXR Touch input into N64 player one |
 | `debug_logging` | `false` | Periodically logs pose and stereo draw counters |
 
@@ -164,7 +170,10 @@ the OpenXR module is intentionally restricted to `arm64-v8a` for Quest.
 
 - No on-device validation yet; axis signs, eye order, and world scale may require immediate tuning.
 - OpenXR FOV correction only applies to matrices recognized as perspective projections. Complex
-  game-specific projection tricks may be misclassified until the Mario Kart profile is added.
+  game-specific projection tricks can still be misclassified.
+- The Mario Kart camera profile is a conservative matrix-pass heuristic, not a reverse-engineered
+  kart/driver transform. Its signs and distances require Quest 3 validation and may expose the kart
+  interior or game-side culling on some camera modes.
 - Game-side culling can still omit scenery exposed by large head turns or leaning.
 - Full-screen framebuffer texture effects may sample the complete side-by-side buffer and need
   eye-aware UV cropping.
@@ -198,8 +207,8 @@ the OpenXR module is intentionally restricted to `arm64-v8a` for Quest.
 1. Fix all CI compiler/linker findings and retain a downloadable APK at every checkpoint.
 2. Add eye-aware sampling for framebuffer-backed texture rectangles and final post-processing passes.
 3. Pass OpenXR eye FOV into GLideN64 and build asymmetric per-eye projection corrections.
-4. Add a Mario Kart 64 profile to identify the main world projection and tune a close chase/driver
-   camera without applying head transforms to sky/HUD passes.
+4. Refine the Mario Kart 64 Z-buffer/projection heuristic from device captures, then identify a
+   stable kart/driver-relative transform for an optional first-person profile.
 5. Add a visible immersive debug overlay with pose, eye matrices, draw counts, and frame timings.
 6. Validate and tune the OpenXR Touch mapping on Quest 3, then add input haptics and an immersive
    settings/recenter panel.
