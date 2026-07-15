@@ -711,6 +711,10 @@ void markFramePresented()
 {
 	if (!isStereoEnabled())
 		return;
+	// Perspective world draws normally latch the frame pose. Menu/HUD-only
+	// frames may contain no transformed draw at all, so associate those frames
+	// with the latest complete pose snapshot at presentation time.
+	latchFramePose();
 	s_presentedPoseTimestamp.store(
 		s_transformPoseTimestamp.load(std::memory_order_acquire),
 		std::memory_order_release);

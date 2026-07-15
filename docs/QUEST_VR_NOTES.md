@@ -25,7 +25,8 @@ The prototype currently contains:
 - VR-aware retention of triangles that rejection microcodes would discard against the original
   camera's screen box, leaving final clipping to each GPU eye transform;
 - source-frame pose association: GLideN64 records the OpenXR display-time pose consumed by the
-  frame at swap, and the projection layer retains that pose for compositor reprojection;
+  frame at swap (including HUD/menu-only frames), and the projection layer retains that pose for
+  compositor reprojection;
 - an experimental Quest/GLideN64-only source-width multiplier, capped to control memory and fill
   cost while a proper anisotropic per-eye render-target path is developed;
 - expanded GLideN64 CPU clipping while stereo is active;
