@@ -1,0 +1,50 @@
+name: Quest first-frame debug
+
+on:
+  push:
+    branches: [quest-vr-first-frame-debug]
+  workflow_dispatch:
+
+jobs:
+  build-debug-apk:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: android-actions/setup-android@v3
+        with:
+          cmdline-tools-version: 9477386
+      - uses: actions/setup-java@v4
+        with:
+          java-version: 21
+          distribution: adopt
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Decode debug keystore
+        env:
+          DEBUG_KEYSTORE: ${{ secrets.DEBUG_KEYSTORE }}
+        run: |
+          if [ -n "$DEBUG_KEYSTORE" ]; then
+            echo "$DEBUG_KEYSTORE" | base64 --decode > debug.keystore
+            sudo cp -f debug.keystore "$HOME/.android/."
+          fi
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends file gawk unzip
+      - name: Apply red-blue first-frame diagnostics
+        run: python3 tools/apply_quest_vr_first_frame_debug.py
+      - name: Build diagnostic APK
+        run: ./gradlew assemble
+      - name: Verify Quest arm64 libraries
+        run: |
+          apk="app/build/outputs/apk/release/Mupen64PlusAE-release.apk"
+          test -f "$apk"
+          unzip -Z1 "$apk" > /tmp/apk-files.txt
+          grep -Fxq 'lib/arm64-v8a/libmupen64plus-quest-vr.so' /tmp/apk-files.txt
+          grep -Fxq 'lib/arm64-v8a/libopenxr_loader.so' /tmp/apk-files.txt
+          grep -Fxq 'lib/arm64-v8a/libmupen64plus-video-GLideN64.so' /tmp/apk-files.txt
+      - name: Upload diagnostic APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: mupen64plus-ae-quest-first-frame-red-blue-${{ github.sha }}
+          path: app/build/outputs/apk/release/Mupen64PlusAE-release.apk
