@@ -566,34 +566,42 @@ int mapCoordinate(int value, int sourceOrigin, int sourceSize, int targetOrigin,
 		static_cast<double>(value - sourceOrigin) * targetSize / sourceSize));
 }
 
-int getDrawTargetWidth()
+int getFramebufferWidth(GLuint framebuffer)
 {
 	const int screenWidth = static_cast<int>(dwnd().getScreenWidth());
-	if (s_drawFramebuffer == 0) {
-		s_lastTargetWidth.store(static_cast<unsigned int>(std::max(0, screenWidth)),
-			std::memory_order_relaxed);
+	if (framebuffer == 0)
 		return screenWidth;
-	}
 
-	const auto target = s_framebufferTargets.find(s_drawFramebuffer);
+	const auto target = s_framebufferTargets.find(framebuffer);
 	if (target == s_framebufferTargets.end()) {
-		s_targetWidthFallbacks.fetch_add(1, std::memory_order_relaxed);
-		s_lastTargetWidth.store(static_cast<unsigned int>(std::max(0, screenWidth)),
-			std::memory_order_relaxed);
-		return screenWidth;
+		return 0;
 	}
 	const auto& dimensions = target->second.renderbuffer
 		? s_renderbufferDimensions : s_textureDimensions;
 	const auto resource = dimensions.find(target->second.resource);
-	if (resource == dimensions.end()) {
-		s_targetWidthFallbacks.fetch_add(1, std::memory_order_relaxed);
-		s_lastTargetWidth.store(static_cast<unsigned int>(std::max(0, screenWidth)),
-			std::memory_order_relaxed);
-		return screenWidth;
-	}
-	s_lastTargetWidth.store(static_cast<unsigned int>(std::max(0, resource->second.width)),
-		std::memory_order_relaxed);
+	if (resource == dimensions.end())
+		return 0;
 	return resource->second.width;
+}
+
+int getDrawTargetWidth()
+{
+	int width = getFramebufferWidth(s_drawFramebuffer);
+	if (width <= 0) {
+		s_targetWidthFallbacks.fetch_add(1, std::memory_order_relaxed);
+		width = static_cast<int>(dwnd().getScreenWidth());
+	}
+	s_lastTargetWidth.store(static_cast<unsigned int>(std::max(0, width)),
+		std::memory_order_relaxed);
+	return width;
+}
+
+int mapEyeCoordinate(int value, int targetWidth, unsigned int eye)
+{
+	const int leftWidth = targetWidth / 2;
+	const int eyeOrigin = eye == 0 ? 0 : leftWidth;
+	const int eyeWidth = eye == 0 ? leftWidth : targetWidth - leftWidth;
+	return mapCoordinate(value, 0, targetWidth, eyeOrigin, eyeWidth);
 }
 
 } // namespace
@@ -707,6 +715,29 @@ void markFramePresented()
 		s_transformPoseTimestamp.load(std::memory_order_acquire),
 		std::memory_order_release);
 	s_framePoseNeedsLatch.store(true, std::memory_order_release);
+}
+
+BlitScope::BlitScope(unsigned int readFramebuffer, unsigned int drawFramebuffer)
+	: m_active(isStereoEnabled())
+	, m_sourceWidth(getFramebufferWidth(readFramebuffer))
+	, m_destinationWidth(getFramebufferWidth(drawFramebuffer))
+{
+	m_active = m_active && m_sourceWidth >= 2 && m_destinationWidth >= 2;
+}
+
+unsigned int BlitScope::eyeCount() const
+{
+	return m_active ? 2U : 1U;
+}
+
+int BlitScope::mapSourceX(int value, unsigned int eye) const
+{
+	return m_active ? mapEyeCoordinate(value, m_sourceWidth, eye) : value;
+}
+
+int BlitScope::mapDestinationX(int value, unsigned int eye) const
+{
+	return m_active ? mapEyeCoordinate(value, m_destinationWidth, eye) : value;
 }
 
 DrawScope::DrawScope(bool transformGeometry)

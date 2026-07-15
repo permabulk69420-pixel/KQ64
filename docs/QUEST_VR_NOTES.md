@@ -20,6 +20,8 @@ The prototype currently contains:
 - eye-aware sampling of side-by-side framebuffer textures in rectangle and triangle passes;
 - eye-aware final framebuffer copy, gamma, depth-copy, and FXAA shader paths so each OpenXR eye
   receives only its matching source half;
+- source/destination-aware direct framebuffer blits, including packed per-eye partial subtexture
+  copies instead of accidentally copying only the left-eye region;
 - source-frame pose association: GLideN64 records the OpenXR display-time pose consumed by the
   frame at swap, and the projection layer retains that pose for compositor reprojection;
 - an experimental Quest/GLideN64-only source-width multiplier, capped to control memory and fill
@@ -221,9 +223,8 @@ the OpenXR module is intentionally restricted to `arm64-v8a` for Quest.
   kart/driver transform. Its signs and distances require Quest 3 validation and may expose the kart
   interior or game-side culling on some camera modes.
 - Game-side culling can still omit scenery exposed by large head turns or leaning.
-- Common framebuffer-backed geometry and final textured-copy/post-processing sampling are
-  eye-aware, but direct framebuffer blits and unusual subtexture copy paths still need device
-  validation.
+- Common framebuffer-backed geometry, direct blits, and final textured-copy/post-processing
+  sampling are eye-aware, but unusual framebuffer paths still need device validation.
 - Billboards still face the original game camera.
 - Sky/background passes are not yet classified separately from world geometry.
 - Rectangle HUD elements have zero disparity but are not yet submitted as an OpenXR quad layer.

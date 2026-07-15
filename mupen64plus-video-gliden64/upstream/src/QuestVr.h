@@ -23,6 +23,25 @@ void resetGraphicsState();
 void markFramePresented();
 
 /**
+ * Maps an emulator-logical framebuffer blit into the packed left/right halves
+ * of both source and destination targets. A non-stereo or untracked target is
+ * left as one ordinary blit.
+ */
+class BlitScope {
+public:
+	BlitScope(unsigned int readFramebuffer, unsigned int drawFramebuffer);
+
+	unsigned int eyeCount() const;
+	int mapSourceX(int value, unsigned int eye) const;
+	int mapDestinationX(int value, unsigned int eye) const;
+
+private:
+	bool m_active;
+	int m_sourceWidth;
+	int m_destinationWidth;
+};
+
+/**
  * Duplicates a GL draw into side-by-side eye viewports. Geometry scopes also
  * upload the current head/eye clip transform to GLideN64 combiner shaders.
  */

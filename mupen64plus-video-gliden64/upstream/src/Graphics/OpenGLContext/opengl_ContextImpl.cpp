@@ -374,7 +374,19 @@ void ContextImpl::addFrameBufferRenderTarget(const graphics::Context::FrameBuffe
 
 bool ContextImpl::blitFramebuffers(const graphics::Context::BlitFramebuffersParams & _params)
 {
-	const bool result = m_blitFramebuffers->blitFramebuffers(_params);
+	bool result = true;
+	QuestVr::BlitScope stereoBlit(u32(_params.readBuffer), u32(_params.drawBuffer));
+	for (u32 eye = 0; eye < stereoBlit.eyeCount(); ++eye) {
+		graphics::Context::BlitFramebuffersParams eyeParams = _params;
+		eyeParams.srcX0 = stereoBlit.mapSourceX(_params.srcX0, eye);
+		eyeParams.srcX1 = stereoBlit.mapSourceX(_params.srcX1, eye);
+		eyeParams.dstX0 = stereoBlit.mapDestinationX(_params.dstX0, eye);
+		eyeParams.dstX1 = stereoBlit.mapDestinationX(_params.dstX1, eye);
+		if (!m_blitFramebuffers->blitFramebuffers(eyeParams)) {
+			result = false;
+			break;
+		}
+	}
 	QuestVr::setFramebufferBinding(u32(graphics::bufferTarget::DRAW_FRAMEBUFFER),
 		u32(_params.drawBuffer));
 	return result;
