@@ -120,6 +120,7 @@ struct State {
     bool recenterChordDown{false};
 
     bool configurationStereoEnabled{true};
+    bool configurationSwapEyes{false};
     float configurationIpdMeters{0.064f};
     float configurationWorldUnitsPerMeter{64.0f};
     float configurationRotationStrength{1.0f};
@@ -787,8 +788,9 @@ bool renderEye(uint32_t eye, uint32_t imageIndex) {
     glUniform1i(g.sourceUniform, 0);
 
     const bool stereo = g.stereoSourceActive;
+    const uint32_t sourceEye = stereo && g.configurationSwapEyes ? 1U - eye : eye;
     const float uvScaleX = stereo ? 0.5f : 1.0f;
-    const float uvOffsetX = stereo ? (eye == 0 ? 0.0f : 0.5f) : 0.0f;
+    const float uvOffsetX = stereo ? (sourceEye == 0 ? 0.0f : 0.5f) : 0.0f;
     glUniform4f(g.uvTransformUniform, uvScaleX, 1.0f, uvOffsetX, 0.0f);
 
     float scaleX = 1.0f;
@@ -1020,13 +1022,14 @@ Java_paulscode_android_mupen64plusae_questvr_QuestVrBridge_nativeOnSourceFrameLa
 
 extern "C" JNIEXPORT void JNICALL
 Java_paulscode_android_mupen64plusae_questvr_QuestVrBridge_nativeConfigure(
-        JNIEnv*, jclass, jboolean stereoEnabled, jfloat ipdMeters,
+        JNIEnv*, jclass, jboolean stereoEnabled, jboolean swapEyes, jfloat ipdMeters,
         jfloat worldUnitsPerMeter, jfloat rotationStrength, jboolean positionEnabled,
         jfloat maxTranslationMeters, jfloat cameraOffsetX, jfloat cameraOffsetY,
         jfloat cameraOffsetZ, jboolean useOpenXrFov, jboolean marioKartProfileEnabled,
         jfloat marioKartCameraOffsetY, jfloat marioKartCameraOffsetZ,
         jboolean touchControllerEnabled, jboolean debugLogging) {
     g.configurationStereoEnabled = stereoEnabled == JNI_TRUE;
+    g.configurationSwapEyes = swapEyes == JNI_TRUE;
     g.configurationIpdMeters = ipdMeters;
     g.configurationWorldUnitsPerMeter = worldUnitsPerMeter;
     g.configurationRotationStrength = rotationStrength;
@@ -1134,7 +1137,8 @@ Java_paulscode_android_mupen64plusae_questvr_QuestVrBridge_nativeRenderFrame(
 
                 XrCompositionLayerProjectionView& view = layerViews[eye];
                 const bool useSourceView = g.stereoSourceActive && g.sourceViewsValid && eye < 2;
-                const XrView& renderedView = useSourceView ? g.sourceViews[eye] : g.views[eye];
+                const uint32_t sourceEye = g.configurationSwapEyes && eye < 2 ? 1U - eye : eye;
+                const XrView& renderedView = useSourceView ? g.sourceViews[sourceEye] : g.views[eye];
                 view.pose = renderedView.pose;
                 view.fov = renderedView.fov;
                 view.subImage.swapchain = swapchain.handle;
@@ -1189,13 +1193,14 @@ Java_paulscode_android_mupen64plusae_questvr_QuestVrBridge_nativeRenderFrame(
             : -1.0;
         LOGI("timing samples=%u submitted=%u layers=%u avgWait=%.2fms "
              "avgNative=%.2fms avgWork=%.2fms maxWork=%.2fms "
-             "source=%dx%d stereo=%d eye=%dx%d sourcePoseAge=%.2fms "
+             "source=%dx%d stereo=%d swapEyes=%d eye=%dx%d sourcePoseAge=%.2fms "
              "poseMatches=%u poseMisses=%u textureTs=%lld",
              g.timingSampleCount, g.submittedFrameCount, g.renderedLayerFrameCount,
              g.waitFrameMilliseconds / divisor, g.nativeFrameMilliseconds / divisor,
              g.workMilliseconds / divisor, g.maximumWorkMilliseconds,
              g.sourceWidth, g.sourceHeight,
-             g.stereoSourceActive ? 1 : 0, eyeWidth, eyeHeight,
+             g.stereoSourceActive ? 1 : 0, g.configurationSwapEyes ? 1 : 0,
+             eyeWidth, eyeHeight,
              sourcePoseAgeMilliseconds, g.sourcePoseMatches, g.sourcePoseMisses,
              static_cast<long long>(g.sourceTextureTimestamp));
         g.timingSampleCount = 0;

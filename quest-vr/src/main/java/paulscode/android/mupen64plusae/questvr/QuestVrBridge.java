@@ -50,7 +50,7 @@ public final class QuestVrBridge {
 
     public static void configure(QuestVrSettings.Configuration configuration) {
         if (sLibraryLoaded) {
-            nativeConfigure(configuration.stereoEnabled, configuration.ipdMeters,
+            nativeConfigure(configuration.stereoEnabled, configuration.swapEyes, configuration.ipdMeters,
                     configuration.worldUnitsPerMeter, configuration.rotationStrength,
                     configuration.positionEnabled, configuration.maxTranslationMeters,
                     configuration.cameraOffsetXMeters, configuration.cameraOffsetYMeters,
@@ -85,7 +85,7 @@ public final class QuestVrBridge {
     private static native boolean nativeInitialize(Activity activity);
     private static native void nativeSetSourceTexture(int texture, int width, int height, boolean requestStereo);
     private static native void nativeOnSourceFrameLatched(long textureTimestampNanos);
-    private static native void nativeConfigure(boolean stereoEnabled, float ipdMeters,
+    private static native void nativeConfigure(boolean stereoEnabled, boolean swapEyes, float ipdMeters,
             float worldUnitsPerMeter, float rotationStrength, boolean positionEnabled,
             float maxTranslationMeters, float cameraOffsetXMeters, float cameraOffsetYMeters,
             float cameraOffsetZMeters, boolean useOpenXrFov, boolean marioKartProfileEnabled,

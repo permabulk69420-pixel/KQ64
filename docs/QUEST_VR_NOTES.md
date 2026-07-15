@@ -137,12 +137,16 @@ untransformed vertices.
 
 ## Configuration
 
-Developer settings are stored in Android shared preferences named `quest_vr`. Defaults are:
+Developer settings are stored in Android shared preferences named `quest_vr`. They are available
+on-device under **Gallery drawer → Display → Quest VR prototype** and take effect on the next game
+launch. Numeric fields accept signed decimal text and fall back to the documented default when
+malformed. Defaults are:
 
 | Key | Default | Current use |
 | --- | ---: | --- |
 | `enabled` | `true` | Enables OpenXR on devices advertising VR head tracking |
 | `stereo_enabled` | `true` | Enables GLideN64 side-by-side geometry |
+| `swap_eyes` | `false` | Exchanges source halves to diagnose or correct inverted stereo |
 | `ipd_meters` | `0.064` | Scales the runtime eye baseline to the requested stereo separation |
 | `world_units_per_meter` | `64.0` | Maps tracked metres to N64 view units |
 | `rotation_strength` | `1.0` | Scales recentered headset rotation |
@@ -197,6 +201,7 @@ the OpenXR module is intentionally restricted to `arm64-v8a` for Quest.
   HMD category.
 - `GameSurface.java`: GLES 3/OpenXR selection, VR frame pacing, fallback, and lifecycle cleanup.
 - `ShaderDrawer.java`: separate external-texture latching from normal Android shader presentation.
+- `QuestVrPrefsActivity.java` and `preferences_quest_vr.xml`: on-device developer tuning controls.
 - `mupen64plus-video-gliden64/upstream/src/QuestVr.*`: explicit VR state/configuration and C bridge.
 - `DisplayWindow.cpp`: records the consumed OpenXR pose timestamp at producer buffer swap.
 - `mupen64plus-input-android/src/plugin.cpp`: thread-safe optional Touch overlay for player one.
@@ -241,7 +246,8 @@ the OpenXR module is intentionally restricted to `arm64-v8a` for Quest.
 
 1. Select GLideN64 and launch Mario Kart 64.
 2. Confirm OpenXR runtime/session/swapchain messages in logcat.
-3. Verify each eye receives the correct half (no inverted stereo).
+3. Verify each eye receives the correct half (no inverted stereo); toggle **Swap source eyes** and
+   relaunch the game if the order is reversed.
 4. Confirm the course geometry has parallax while HUD rectangles remain zero disparity.
 5. Check yaw, pitch, and roll direction from a stationary kart.
 6. Verify Touch A/B, analog steering, Z/R, C buttons, Start, and the two-stick-click recenter chord.
