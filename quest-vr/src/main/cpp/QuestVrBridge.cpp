@@ -9,6 +9,7 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
@@ -46,7 +47,8 @@ using ConfigureVrFn = void (*)(int stereoEnabled, float ipdMeters, float worldUn
                                float marioKartCameraOffsetY, float marioKartCameraOffsetZ);
 using RecenterVrFn = void (*)();
 using GetVrStatsFn = void (*)(uint32_t* geometryDraws, uint32_t* rectangleDraws,
-                              uint32_t* eyeDraws, uint32_t* poseGeneration);
+                              uint32_t* eyeDraws, uint32_t* poseGeneration,
+                              uint32_t* targetWidthFallbacks, uint32_t* lastTargetWidth);
 using SetVrInputFn = void (*)(int enabled, uint32_t buttonMask, float analogX, float analogY);
 
 struct ControllerActions {
@@ -124,7 +126,14 @@ struct State {
     float configurationMarioKartCameraOffsetZ{-0.75f};
     bool touchControllerEnabled{true};
     bool debugLogging{false};
+    uint32_t posePublicationCount{0};
     uint32_t submittedFrameCount{0};
+    uint32_t timingSampleCount{0};
+    uint32_t renderedLayerFrameCount{0};
+    double waitFrameMilliseconds{0.0};
+    double nativeFrameMilliseconds{0.0};
+    double workMilliseconds{0.0};
+    double maximumWorkMilliseconds{0.0};
 };
 
 State g;
@@ -532,14 +541,17 @@ void publishHeadPose(XrTime displayTime, uint32_t viewCount) {
             right.fov.angleLeft, right.fov.angleRight, right.fov.angleUp, right.fov.angleDown);
     }
 
-    ++g.submittedFrameCount;
-    if (g.debugLogging && g.submittedFrameCount % 300 == 0) {
+    ++g.posePublicationCount;
+    if (g.debugLogging && g.posePublicationCount % 300 == 0) {
         uint32_t geometryDraws = 0;
         uint32_t rectangleDraws = 0;
         uint32_t eyeDraws = 0;
         uint32_t poseGeneration = 0;
+        uint32_t targetWidthFallbacks = 0;
+        uint32_t lastTargetWidth = 0;
         if (g.getVrStats != nullptr) {
-            g.getVrStats(&geometryDraws, &rectangleDraws, &eyeDraws, &poseGeneration);
+            g.getVrStats(&geometryDraws, &rectangleDraws, &eyeDraws, &poseGeneration,
+                         &targetWidthFallbacks, &lastTargetWidth);
         }
         float runtimeIpd = 0.0f;
         if (viewCount >= 2) {
@@ -552,12 +564,14 @@ void publishHeadPose(XrTime displayTime, uint32_t viewCount) {
         }
         LOGI("pose q=[%.3f %.3f %.3f %.3f] p=[%.3f %.3f %.3f], "
              "runtimeIpd=%.4f fovL=[%.3f %.3f %.3f %.3f], "
-             "draws geometry=%u rect=%u eyes=%u poseGeneration=%u",
+             "draws geometry=%u rect=%u eyes=%u poseGeneration=%u "
+             "targetWidth=%u targetFallbacks=%u",
              pose.orientation.x, pose.orientation.y, pose.orientation.z, pose.orientation.w,
              position.x, position.y, position.z, runtimeIpd,
              g.views[0].fov.angleLeft, g.views[0].fov.angleRight,
              g.views[0].fov.angleUp, g.views[0].fov.angleDown,
-             geometryDraws, rectangleDraws, eyeDraws, poseGeneration);
+             geometryDraws, rectangleDraws, eyeDraws, poseGeneration,
+             lastTargetWidth, targetWidthFallbacks);
     }
 }
 
@@ -685,15 +699,18 @@ void pollEvents() {
     }
 }
 
-void renderEye(uint32_t eye, uint32_t imageIndex) {
+bool renderEye(uint32_t eye, uint32_t imageIndex) {
     const Swapchain& swapchain = g.swapchains[eye];
+    while (glGetError() != GL_NO_ERROR) {
+        // Discard stale errors so diagnostics describe this eye submission.
+    }
     glBindFramebuffer(GL_FRAMEBUFFER, g.framebuffer);
     glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D,
                            swapchain.images[imageIndex].image, 0);
     const GLenum framebufferStatus = glCheckFramebufferStatus(GL_FRAMEBUFFER);
     if (framebufferStatus != GL_FRAMEBUFFER_COMPLETE) {
         LOGE("OpenXR eye framebuffer is incomplete: 0x%x", framebufferStatus);
-        return;
+        return false;
     }
     glViewport(0, 0, swapchain.width, swapchain.height);
     glDisable(GL_DEPTH_TEST);
@@ -704,7 +721,7 @@ void renderEye(uint32_t eye, uint32_t imageIndex) {
     glClear(GL_COLOR_BUFFER_BIT);
 
     if (g.sourceTexture == 0) {
-        return;
+        return true;
     }
 
     glUseProgram(g.program);
@@ -731,6 +748,12 @@ void renderEye(uint32_t eye, uint32_t imageIndex) {
     }
     glUniform2f(g.quadScaleUniform, scaleX, scaleY);
     glDrawArrays(GL_TRIANGLES, 0, 6);
+    const GLenum error = glGetError();
+    if (error != GL_NO_ERROR) {
+        LOGE("OpenXR eye %u GLES submission failed: 0x%x", eye, error);
+        return false;
+    }
+    return true;
 }
 
 void destroyState(JNIEnv* env) {
@@ -985,11 +1008,15 @@ Java_paulscode_android_mupen64plusae_questvr_QuestVrBridge_nativeRenderFrame(
 
     syncControllerInput();
 
+    using Clock = std::chrono::steady_clock;
+    const Clock::time_point nativeFrameStart = Clock::now();
+    const Clock::time_point waitFrameStart = Clock::now();
     XrFrameWaitInfo waitInfo{XR_TYPE_FRAME_WAIT_INFO};
     XrFrameState frameState{XR_TYPE_FRAME_STATE};
     if (!xrOk(xrWaitFrame(g.session, &waitInfo, &frameState), "xrWaitFrame")) {
         return JNI_FALSE;
     }
+    const Clock::time_point waitFrameEnd = Clock::now();
     XrFrameBeginInfo beginInfo{XR_TYPE_FRAME_BEGIN_INFO};
     if (!xrOk(xrBeginFrame(g.session, &beginInfo), "xrBeginFrame")) {
         return JNI_FALSE;
@@ -1031,7 +1058,7 @@ Java_paulscode_android_mupen64plusae_questvr_QuestVrBridge_nativeRenderFrame(
                 if (!xrOk(xrWaitSwapchainImage(swapchain.handle, &imageWait), "xrWaitSwapchainImage")) {
                     rendered = false;
                 } else {
-                    renderEye(eye, imageIndex);
+                    rendered = renderEye(eye, imageIndex);
                 }
                 XrSwapchainImageReleaseInfo releaseInfo{XR_TYPE_SWAPCHAIN_IMAGE_RELEASE_INFO};
                 xrOk(xrReleaseSwapchainImage(swapchain.handle, &releaseInfo), "xrReleaseSwapchainImage");
@@ -1062,7 +1089,47 @@ Java_paulscode_android_mupen64plusae_questvr_QuestVrBridge_nativeRenderFrame(
     endInfo.environmentBlendMode = XR_ENVIRONMENT_BLEND_MODE_OPAQUE;
     endInfo.layerCount = layerCount;
     endInfo.layers = layerCount == 0 ? nullptr : layers.data();
-    return xrOk(xrEndFrame(g.session, &endInfo), "xrEndFrame") ? JNI_TRUE : JNI_FALSE;
+    const bool submitted = xrOk(xrEndFrame(g.session, &endInfo), "xrEndFrame");
+    const Clock::time_point nativeFrameEnd = Clock::now();
+    if (!submitted) {
+        return JNI_FALSE;
+    }
+
+    const double waitMilliseconds =
+        std::chrono::duration<double, std::milli>(waitFrameEnd - waitFrameStart).count();
+    const double nativeMilliseconds =
+        std::chrono::duration<double, std::milli>(nativeFrameEnd - nativeFrameStart).count();
+    const double workMilliseconds = std::max(0.0, nativeMilliseconds - waitMilliseconds);
+    ++g.submittedFrameCount;
+    ++g.timingSampleCount;
+    if (layerCount != 0) {
+        ++g.renderedLayerFrameCount;
+    }
+    g.waitFrameMilliseconds += waitMilliseconds;
+    g.nativeFrameMilliseconds += nativeMilliseconds;
+    g.workMilliseconds += workMilliseconds;
+    g.maximumWorkMilliseconds = std::max(g.maximumWorkMilliseconds, workMilliseconds);
+
+    if (g.debugLogging && g.timingSampleCount >= 300) {
+        const double divisor = static_cast<double>(g.timingSampleCount);
+        const int eyeWidth = g.swapchains.empty() ? 0 : g.swapchains[0].width;
+        const int eyeHeight = g.swapchains.empty() ? 0 : g.swapchains[0].height;
+        LOGI("timing samples=%u submitted=%u layers=%u avgWait=%.2fms "
+             "avgNative=%.2fms avgWork=%.2fms maxWork=%.2fms "
+             "source=%dx%d stereo=%d eye=%dx%d",
+             g.timingSampleCount, g.submittedFrameCount, g.renderedLayerFrameCount,
+             g.waitFrameMilliseconds / divisor, g.nativeFrameMilliseconds / divisor,
+             g.workMilliseconds / divisor, g.maximumWorkMilliseconds,
+             g.sourceWidth, g.sourceHeight,
+             g.stereoSourceActive ? 1 : 0, eyeWidth, eyeHeight);
+        g.timingSampleCount = 0;
+        g.renderedLayerFrameCount = 0;
+        g.waitFrameMilliseconds = 0.0;
+        g.nativeFrameMilliseconds = 0.0;
+        g.workMilliseconds = 0.0;
+        g.maximumWorkMilliseconds = 0.0;
+    }
+    return JNI_TRUE;
 }
 
 extern "C" JNIEXPORT jboolean JNICALL

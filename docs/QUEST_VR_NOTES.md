@@ -18,6 +18,8 @@ The prototype currently contains:
 - monoscopic duplication of rectangle/HUD draws into both eye viewports;
 - render-target-aware eye viewport/scissor mapping for the window and emulated framebuffer objects;
 - eye-aware sampling of side-by-side framebuffer textures in rectangle and triangle passes;
+- an experimental Quest/GLideN64-only source-width multiplier, capped to control memory and fill
+  cost while a proper anisotropic per-eye render-target path is developed;
 - expanded GLideN64 CPU clipping while stereo is active;
 - an OpenXR Touch action-set fallback merged with the normal player-one controller state;
 - a Mario Kart 64 profile using GLideN64's existing `hack_MK64` ROM identification, with a modest
@@ -142,12 +144,19 @@ Developer settings are stored in Android shared preferences named `quest_vr`. De
 | `mario_kart_profile_enabled` | `true` | Enables the title-scoped close-chase experiment |
 | `mario_kart_camera_offset_y_meters` | `-0.20` | Lowers the tracked camera for MK64 Z-buffered world passes |
 | `mario_kart_camera_offset_z_meters` | `-0.75` | Moves the tracked camera toward the kart for MK64 world passes |
+| `stereo_source_width_scale` | `1.0` | Experimental multiplier for GLideN64's full SBS source width |
+| `max_stereo_source_width` | `4096` | Caps the full side-by-side source width |
 | `touch_controller_enabled` | `true` | Merges OpenXR Touch input into N64 player one |
-| `debug_logging` | `false` | Periodically logs pose and stereo draw counters |
+| `debug_logging` | `true` | Periodically logs pose, draw counters, and OpenXR frame timings |
 
 Positional tracking is intentionally off by default for the first Quest build. Orientation and eye
 separation are active. The renderer automatically captures the first valid headset pose as its
 recenter origin.
+
+Prototype diagnostics log average `xrWaitFrame` time, native frame-loop work time, the maximum
+work-time sample, source/swapchain dimensions, geometry/rectangle/eye draw totals, the last stereo
+target width, and any render-target dimension fallbacks. GLES and incomplete-framebuffer failures
+are always logged even when periodic diagnostics are disabled.
 
 ## Build and CI
 
@@ -195,6 +204,10 @@ the OpenXR module is intentionally restricted to `arm64-v8a` for Quest.
 - Rectangle HUD elements have zero disparity but are not yet submitted as an OpenXR quad layer.
 - The original Android game sidebar is not yet reproduced in an immersive layer.
 - OpenXR swapchain rendering is single-sample, and no foveation extension is enabled.
+- Each eye currently receives half the configured source's horizontal pixels. Raising the
+  experimental source-width scale can recover detail, but GLideN64 uses a scalar internal
+  framebuffer scale, so a naive 2x width can also inflate offscreen height and cost much more than
+  2x. It remains at 1x until the framebuffer allocator supports independent stereo X/Y scaling.
 - A 30 FPS N64 title is latched into a higher-rate OpenXR loop; the runtime supplies head timewarp,
   but game-camera updates still occur at emulation cadence.
 - Touch input uses the core Oculus Touch interaction profile, which Quest Touch Plus can expose
@@ -220,8 +233,8 @@ the OpenXR module is intentionally restricted to `arm64-v8a` for Quest.
 1. Fix all CI compiler/linker findings and retain a downloadable APK at every checkpoint.
 2. Validate the target-aware SBS layout and framebuffer sampling on Quest 3, including menus,
    countdowns, transitions, and Mario Kart's framebuffer effects.
-3. Add frame timing and render-target diagnostics, then select a higher per-eye source resolution
-   that remains within Quest 3 performance limits.
+3. Use the new native timing logs to tune `stereo_source_width_scale`, then add GPU timing/foveation
+   if the full-resolution default misses the Quest 3 frame budget.
 4. Refine the Mario Kart 64 Z-buffer/projection heuristic from device captures, then identify a
    stable kart/driver-relative transform for an optional first-person profile.
 5. Add a visible immersive debug overlay with pose, eye matrices, draw counts, and frame timings.

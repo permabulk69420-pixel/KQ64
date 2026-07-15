@@ -88,6 +88,8 @@ import paulscode.android.mupen64plusae.persistent.GamePrefs;
 import paulscode.android.mupen64plusae.persistent.GlobalPrefs;
 import paulscode.android.mupen64plusae.jni.CoreTypes.PakType;
 import paulscode.android.mupen64plusae.profile.ControllerProfile;
+import paulscode.android.mupen64plusae.questvr.QuestVrBridge;
+import paulscode.android.mupen64plusae.questvr.QuestVrSettings;
 import paulscode.android.mupen64plusae.util.CountryCode;
 import paulscode.android.mupen64plusae.util.DisplayResolutionData;
 import paulscode.android.mupen64plusae.util.DisplayWrapper;
@@ -559,7 +561,7 @@ public class GameActivity extends AppCompatActivity implements PromptConfirmList
             if (!mCoreFragment.IsInProgress()) {
                 mCoreFragment.startCore(mGlobalPrefs, mGamePrefs, mRomGoodName, mRomDisplayName, mRomPath, mZipPath,
                         mRomMd5, mRomCrc, mRomHeaderName, mRomCountryCode, mRomArtPath, mDoRestart,
-                        mDisplayResolutionData.getResolutionWidth(mGamePrefs.verticalRenderResolution),
+                        getVideoRenderWidth(),
                         mDisplayResolutionData.getResolutionHeight(mGamePrefs.verticalRenderResolution),
                         mIsNetplayEnabled);
             }
@@ -571,6 +573,26 @@ public class GameActivity extends AppCompatActivity implements PromptConfirmList
         }
 
         mGameSurface.startGlContext();
+    }
+
+    private int getVideoRenderWidth()
+    {
+        final int baseWidth =
+                mDisplayResolutionData.getResolutionWidth(mGamePrefs.verticalRenderResolution);
+        final QuestVrSettings.Configuration vr = QuestVrSettings.load(this);
+        if (!vr.enabled || !vr.stereoEnabled ||
+                mGamePrefs.videoPluginLib != AppData.VideoPlugin.GLIDEN64 ||
+                !QuestVrBridge.isDeviceCapable(this)) {
+            return baseWidth;
+        }
+
+        final float widthScale = Math.max(1.0f, Math.min(2.0f, vr.stereoSourceWidthScale));
+        final int maximumWidth = Math.max(baseWidth, vr.maxStereoSourceWidth);
+        int stereoWidth = Math.min(maximumWidth, Math.round(baseWidth * widthScale));
+        stereoWidth = Math.min(maximumWidth & ~1, (stereoWidth + 1) & ~1);
+        stereoWidth = Math.max(baseWidth, stereoWidth);
+        Log.i(TAG, "Quest VR stereo source width " + baseWidth + " -> " + stereoWidth);
+        return stereoWidth;
     }
 
     @Override

@@ -36,8 +36,10 @@ public final class QuestVrSettings {
                 preferences.getBoolean("mario_kart_profile_enabled", true),
                 preferences.getFloat("mario_kart_camera_offset_y_meters", -0.20f),
                 preferences.getFloat("mario_kart_camera_offset_z_meters", -0.75f),
+                preferences.getFloat("stereo_source_width_scale", 1.0f),
+                preferences.getInt("max_stereo_source_width", 4096),
                 preferences.getBoolean("touch_controller_enabled", true),
-                preferences.getBoolean("debug_logging", false));
+                preferences.getBoolean("debug_logging", true));
     }
 
     public static final class Configuration {
@@ -61,6 +63,8 @@ public final class QuestVrSettings {
         public final boolean marioKartProfileEnabled;
         public final float marioKartCameraOffsetYMeters;
         public final float marioKartCameraOffsetZMeters;
+        public final float stereoSourceWidthScale;
+        public final int maxStereoSourceWidth;
         public final boolean touchControllerEnabled;
         public final boolean debugLogging;
 
@@ -71,6 +75,7 @@ public final class QuestVrSettings {
                 float hudScale, String hudMode, float cullingExpansion,
                 boolean useOpenXrFov, boolean marioKartProfileEnabled,
                 float marioKartCameraOffsetYMeters, float marioKartCameraOffsetZMeters,
+                float stereoSourceWidthScale, int maxStereoSourceWidth,
                 boolean touchControllerEnabled, boolean debugLogging) {
             this.enabled = enabled;
             this.stereoEnabled = stereoEnabled;
@@ -92,6 +97,8 @@ public final class QuestVrSettings {
             this.marioKartProfileEnabled = marioKartProfileEnabled;
             this.marioKartCameraOffsetYMeters = marioKartCameraOffsetYMeters;
             this.marioKartCameraOffsetZMeters = marioKartCameraOffsetZMeters;
+            this.stereoSourceWidthScale = stereoSourceWidthScale;
+            this.maxStereoSourceWidth = maxStereoSourceWidth;
             this.touchControllerEnabled = touchControllerEnabled;
             this.debugLogging = debugLogging;
         }

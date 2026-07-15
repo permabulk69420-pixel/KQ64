@@ -96,6 +96,8 @@ std::atomic<unsigned int> s_configGeneration{1};
 std::atomic<unsigned int> s_geometryDraws{0};
 std::atomic<unsigned int> s_rectangleDraws{0};
 std::atomic<unsigned int> s_eyeDraws{0};
+std::atomic<unsigned int> s_targetWidthFallbacks{0};
+std::atomic<unsigned int> s_lastTargetWidth{0};
 
 AtomicPose s_pose;
 AtomicPose s_recenterPose;
@@ -484,17 +486,31 @@ int mapCoordinate(int value, int sourceOrigin, int sourceSize, int targetOrigin,
 
 int getDrawTargetWidth()
 {
-	if (s_drawFramebuffer == 0)
-		return static_cast<int>(dwnd().getScreenWidth());
+	const int screenWidth = static_cast<int>(dwnd().getScreenWidth());
+	if (s_drawFramebuffer == 0) {
+		s_lastTargetWidth.store(static_cast<unsigned int>(std::max(0, screenWidth)),
+			std::memory_order_relaxed);
+		return screenWidth;
+	}
 
 	const auto target = s_framebufferTargets.find(s_drawFramebuffer);
-	if (target == s_framebufferTargets.end())
-		return static_cast<int>(dwnd().getScreenWidth());
+	if (target == s_framebufferTargets.end()) {
+		s_targetWidthFallbacks.fetch_add(1, std::memory_order_relaxed);
+		s_lastTargetWidth.store(static_cast<unsigned int>(std::max(0, screenWidth)),
+			std::memory_order_relaxed);
+		return screenWidth;
+	}
 	const auto& dimensions = target->second.renderbuffer
 		? s_renderbufferDimensions : s_textureDimensions;
 	const auto resource = dimensions.find(target->second.resource);
-	if (resource == dimensions.end())
-		return static_cast<int>(dwnd().getScreenWidth());
+	if (resource == dimensions.end()) {
+		s_targetWidthFallbacks.fetch_add(1, std::memory_order_relaxed);
+		s_lastTargetWidth.store(static_cast<unsigned int>(std::max(0, screenWidth)),
+			std::memory_order_relaxed);
+		return screenWidth;
+	}
+	s_lastTargetWidth.store(static_cast<unsigned int>(std::max(0, resource->second.width)),
+		std::memory_order_relaxed);
 	return resource->second.width;
 }
 
@@ -745,7 +761,8 @@ extern "C" QUEST_VR_EXPORT void M64PQuestVrRecenter()
 }
 
 extern "C" QUEST_VR_EXPORT void M64PQuestVrGetStats(unsigned int* geometryDraws,
-	unsigned int* rectangleDraws, unsigned int* eyeDraws, unsigned int* poseGeneration)
+	unsigned int* rectangleDraws, unsigned int* eyeDraws, unsigned int* poseGeneration,
+	unsigned int* targetWidthFallbacks, unsigned int* lastTargetWidth)
 {
 	if (geometryDraws != nullptr)
 		*geometryDraws = s_geometryDraws.load(std::memory_order_relaxed);
@@ -755,4 +772,8 @@ extern "C" QUEST_VR_EXPORT void M64PQuestVrGetStats(unsigned int* geometryDraws,
 		*eyeDraws = s_eyeDraws.load(std::memory_order_relaxed);
 	if (poseGeneration != nullptr)
 		*poseGeneration = s_poseGeneration.load(std::memory_order_relaxed);
+	if (targetWidthFallbacks != nullptr)
+		*targetWidthFallbacks = s_targetWidthFallbacks.load(std::memory_order_relaxed);
+	if (lastTargetWidth != nullptr)
+		*lastTargetWidth = s_lastTargetWidth.load(std::memory_order_relaxed);
 }
