@@ -49,7 +49,14 @@ using RecenterVrFn = void (*)();
 using GetVrStatsFn = void (*)(uint32_t* geometryDraws, uint32_t* rectangleDraws,
                               uint32_t* eyeDraws, uint32_t* poseGeneration,
                               uint32_t* targetWidthFallbacks, uint32_t* lastTargetWidth);
+using GetPresentedPoseTimestampFn = int64_t (*)();
 using SetVrInputFn = void (*)(int enabled, uint32_t buttonMask, float analogX, float analogY);
+
+struct PoseHistoryEntry {
+    XrTime displayTime{0};
+    std::array<XrView, 2> views{};
+    bool valid{false};
+};
 
 struct ControllerActions {
     XrActionSet actionSet{XR_NULL_HANDLE};
@@ -104,6 +111,7 @@ struct State {
     ConfigureVrFn configureVr{nullptr};
     RecenterVrFn recenterVr{nullptr};
     GetVrStatsFn getVrStats{nullptr};
+    GetPresentedPoseTimestampFn getPresentedPoseTimestamp{nullptr};
     SetVrInputFn setVrInput{nullptr};
     bool rendererBridgeLogged{false};
     bool inputBridgeLogged{false};
@@ -126,6 +134,14 @@ struct State {
     float configurationMarioKartCameraOffsetZ{-0.75f};
     bool touchControllerEnabled{true};
     bool debugLogging{false};
+    std::array<PoseHistoryEntry, 256> poseHistory{};
+    size_t poseHistoryWriteIndex{0};
+    std::array<XrView, 2> sourceViews{};
+    bool sourceViewsValid{false};
+    XrTime sourceViewDisplayTime{0};
+    int64_t sourceTextureTimestamp{0};
+    uint32_t sourcePoseMatches{0};
+    uint32_t sourcePoseMisses{0};
     uint32_t posePublicationCount{0};
     uint32_t submittedFrameCount{0};
     uint32_t timingSampleCount{0};
@@ -362,6 +378,8 @@ void resolveRendererBridge() {
     g.configureVr = reinterpret_cast<ConfigureVrFn>(dlsym(symbolScope, "M64PQuestVrConfigure"));
     g.recenterVr = reinterpret_cast<RecenterVrFn>(dlsym(symbolScope, "M64PQuestVrRecenter"));
     g.getVrStats = reinterpret_cast<GetVrStatsFn>(dlsym(symbolScope, "M64PQuestVrGetStats"));
+    g.getPresentedPoseTimestamp = reinterpret_cast<GetPresentedPoseTimestampFn>(
+        dlsym(symbolScope, "M64PQuestVrGetPresentedPoseTimestamp"));
 
     const bool found = g.setVrEnabled != nullptr && g.setVrPose != nullptr;
     if (found) {
@@ -515,6 +533,43 @@ void syncControllerInput() {
     g.setVrInput(1, buttons, leftStick.x, leftStick.y);
 }
 
+void rememberPublishedViews(XrTime displayTime, uint32_t viewCount) {
+    if (viewCount < 2) {
+        return;
+    }
+    PoseHistoryEntry& entry = g.poseHistory[g.poseHistoryWriteIndex % g.poseHistory.size()];
+    entry.displayTime = displayTime;
+    entry.views[0] = g.views[0];
+    entry.views[1] = g.views[1];
+    entry.valid = true;
+    ++g.poseHistoryWriteIndex;
+}
+
+void associateLatchedSourceFrame(int64_t textureTimestamp) {
+    g.sourceTextureTimestamp = textureTimestamp;
+    g.sourceViewsValid = false;
+    if (!g.stereoSourceActive || g.getPresentedPoseTimestamp == nullptr) {
+        return;
+    }
+
+    const XrTime renderedDisplayTime =
+        static_cast<XrTime>(g.getPresentedPoseTimestamp());
+    if (renderedDisplayTime == 0) {
+        ++g.sourcePoseMisses;
+        return;
+    }
+    for (const PoseHistoryEntry& entry : g.poseHistory) {
+        if (entry.valid && entry.displayTime == renderedDisplayTime) {
+            g.sourceViews = entry.views;
+            g.sourceViewDisplayTime = renderedDisplayTime;
+            g.sourceViewsValid = true;
+            ++g.sourcePoseMatches;
+            return;
+        }
+    }
+    ++g.sourcePoseMisses;
+}
+
 void publishHeadPose(XrTime displayTime, uint32_t viewCount) {
     resolveRendererBridge();
     if (g.setVrPose == nullptr || viewCount == 0) {
@@ -529,8 +584,7 @@ void publishHeadPose(XrTime displayTime, uint32_t viewCount) {
         position.z = (g.views[0].pose.position.z + g.views[1].pose.position.z) * 0.5f;
     }
 
-    g.setVrPose(pose.orientation.x, pose.orientation.y, pose.orientation.z, pose.orientation.w,
-                position.x, position.y, position.z, static_cast<int64_t>(displayTime));
+    rememberPublishedViews(displayTime, viewCount);
     if (g.setVrViews != nullptr && viewCount >= 2) {
         const XrView& left = g.views[0];
         const XrView& right = g.views[1];
@@ -540,6 +594,8 @@ void publishHeadPose(XrTime displayTime, uint32_t viewCount) {
             right.pose.position.x, right.pose.position.y, right.pose.position.z,
             right.fov.angleLeft, right.fov.angleRight, right.fov.angleUp, right.fov.angleDown);
     }
+    g.setVrPose(pose.orientation.x, pose.orientation.y, pose.orientation.z, pose.orientation.w,
+                position.x, position.y, position.z, static_cast<int64_t>(displayTime));
 
     ++g.posePublicationCount;
     if (g.debugLogging && g.posePublicationCount % 300 == 0) {
@@ -948,6 +1004,18 @@ Java_paulscode_android_mupen64plusae_questvr_QuestVrBridge_nativeSetSourceTextur
     resolveRendererBridge();
     g.stereoSourceActive = g.setVrEnabled != nullptr && g.stereoRequested &&
                            g.configurationStereoEnabled;
+    if (texture == 0) {
+        g.sourceViewsValid = false;
+        g.sourceViewDisplayTime = 0;
+        g.sourceTextureTimestamp = 0;
+    }
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_paulscode_android_mupen64plusae_questvr_QuestVrBridge_nativeOnSourceFrameLatched(
+        JNIEnv*, jclass, jlong textureTimestamp) {
+    resolveRendererBridge();
+    associateLatchedSourceFrame(static_cast<int64_t>(textureTimestamp));
 }
 
 extern "C" JNIEXPORT void JNICALL
@@ -1065,8 +1133,10 @@ Java_paulscode_android_mupen64plusae_questvr_QuestVrBridge_nativeRenderFrame(
                 if (!rendered) break;
 
                 XrCompositionLayerProjectionView& view = layerViews[eye];
-                view.pose = g.views[eye].pose;
-                view.fov = g.views[eye].fov;
+                const bool useSourceView = g.stereoSourceActive && g.sourceViewsValid && eye < 2;
+                const XrView& renderedView = useSourceView ? g.sourceViews[eye] : g.views[eye];
+                view.pose = renderedView.pose;
+                view.fov = renderedView.fov;
                 view.subImage.swapchain = swapchain.handle;
                 view.subImage.imageRect.offset = {0, 0};
                 view.subImage.imageRect.extent = {swapchain.width, swapchain.height};
@@ -1114,14 +1184,20 @@ Java_paulscode_android_mupen64plusae_questvr_QuestVrBridge_nativeRenderFrame(
         const double divisor = static_cast<double>(g.timingSampleCount);
         const int eyeWidth = g.swapchains.empty() ? 0 : g.swapchains[0].width;
         const int eyeHeight = g.swapchains.empty() ? 0 : g.swapchains[0].height;
+        const double sourcePoseAgeMilliseconds = g.sourceViewsValid
+            ? static_cast<double>(frameState.predictedDisplayTime - g.sourceViewDisplayTime) / 1.0e6
+            : -1.0;
         LOGI("timing samples=%u submitted=%u layers=%u avgWait=%.2fms "
              "avgNative=%.2fms avgWork=%.2fms maxWork=%.2fms "
-             "source=%dx%d stereo=%d eye=%dx%d",
+             "source=%dx%d stereo=%d eye=%dx%d sourcePoseAge=%.2fms "
+             "poseMatches=%u poseMisses=%u textureTs=%lld",
              g.timingSampleCount, g.submittedFrameCount, g.renderedLayerFrameCount,
              g.waitFrameMilliseconds / divisor, g.nativeFrameMilliseconds / divisor,
              g.workMilliseconds / divisor, g.maximumWorkMilliseconds,
              g.sourceWidth, g.sourceHeight,
-             g.stereoSourceActive ? 1 : 0, eyeWidth, eyeHeight);
+             g.stereoSourceActive ? 1 : 0, eyeWidth, eyeHeight,
+             sourcePoseAgeMilliseconds, g.sourcePoseMatches, g.sourcePoseMisses,
+             static_cast<long long>(g.sourceTextureTimestamp));
         g.timingSampleCount = 0;
         g.renderedLayerFrameCount = 0;
         g.waitFrameMilliseconds = 0.0;

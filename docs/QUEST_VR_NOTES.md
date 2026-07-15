@@ -20,6 +20,8 @@ The prototype currently contains:
 - eye-aware sampling of side-by-side framebuffer textures in rectangle and triangle passes;
 - eye-aware final framebuffer copy, gamma, depth-copy, and FXAA shader paths so each OpenXR eye
   receives only its matching source half;
+- source-frame pose association: GLideN64 records the OpenXR display-time pose consumed by the
+  frame at swap, and the projection layer retains that pose for compositor reprojection;
 - an experimental Quest/GLideN64-only source-width multiplier, capped to control memory and fill
   cost while a proper anisotropic per-eye render-target path is developed;
 - expanded GLideN64 CPU clipping while stereo is active;
@@ -55,6 +57,15 @@ In Quest mode, `GameSurface.RenderThread` still owns the consumer external-OES t
 the OpenXR session using that same current EGL context, latches emulator frames as they arrive, and
 runs the OpenXR frame loop at runtime pacing. The normal Android shader/swap path is retained for
 non-VR devices and OpenXR initialization failures.
+
+The producer and presenter run asynchronously. OpenXR pose and view values are published as one
+sequenced snapshot; GLideN64 freezes that snapshot at the first perspective draw so a frame cannot
+mix head poses between batches. It records the frozen pose timestamp immediately before the
+producer buffer swap. After `SurfaceTexture`
+latches that buffer, the presenter matches the timestamp against a short history of located OpenXR
+views. The projection layer then reports the view pose that actually produced the held emulator
+image, rather than claiming that a 30 FPS image was rendered at the newest headset pose. This gives
+the runtime valid metadata for rotational reprojection between N64 frames.
 
 ## OpenXR integration
 
@@ -187,6 +198,7 @@ the OpenXR module is intentionally restricted to `arm64-v8a` for Quest.
 - `GameSurface.java`: GLES 3/OpenXR selection, VR frame pacing, fallback, and lifecycle cleanup.
 - `ShaderDrawer.java`: separate external-texture latching from normal Android shader presentation.
 - `mupen64plus-video-gliden64/upstream/src/QuestVr.*`: explicit VR state/configuration and C bridge.
+- `DisplayWindow.cpp`: records the consumed OpenXR pose timestamp at producer buffer swap.
 - `mupen64plus-input-android/src/plugin.cpp`: thread-safe optional Touch overlay for player one.
 - GLideN64 OpenGL drawers: two-eye viewport replay without duplicate vertex uploads.
 - GLideN64 generated and special shaders: eye/head clip transforms plus eye-aware framebuffer,
@@ -216,8 +228,9 @@ the OpenXR module is intentionally restricted to `arm64-v8a` for Quest.
   experimental source-width scale can recover detail, but GLideN64 uses a scalar internal
   framebuffer scale, so a naive 2x width can also inflate offscreen height and cost much more than
   2x. It remains at 1x until the framebuffer allocator supports independent stereo X/Y scaling.
-- A 30 FPS N64 title is latched into a higher-rate OpenXR loop; the runtime supplies head timewarp,
-  but game-camera updates still occur at emulation cadence.
+- A 30 FPS N64 title is latched into a higher-rate OpenXR loop. Source-pose metadata now permits
+  runtime reprojection of held frames, but game-world animation and camera translation still update
+  at emulation cadence, and the association needs on-device timing validation.
 - Touch input uses the core Oculus Touch interaction profile, which Quest Touch Plus can expose
   through runtime compatibility. The current mapping is left stick=N64 stick, A/B=N64 A/B,
   either index trigger=Z, left/right squeeze=L/R, right stick=C buttons, right stick click=Start,

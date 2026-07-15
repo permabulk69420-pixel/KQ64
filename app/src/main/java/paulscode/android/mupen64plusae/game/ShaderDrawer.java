@@ -140,14 +140,16 @@ public class ShaderDrawer {
     }
 
     /** Latch the newest emulator frame without running the Android presentation shaders. */
-    public void updateSourceTexture() {
+    public long updateSourceTexture() {
         if (mGameTexture != null) {
             try {
                 mGameTexture.updateTexImage();
+                return mGameTexture.getTimestamp();
             } catch (RuntimeException e) {
                 e.printStackTrace();
             }
         }
+        return 0;
     }
 
     public Bitmap getScreenShot() {

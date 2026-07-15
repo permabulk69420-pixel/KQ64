@@ -842,7 +842,8 @@ public class GameSurface extends SurfaceView implements SurfaceHolder.Callback
          */
         private void frameAvailable() {
             if (mQuestVrActive) {
-                mShaderDrawer.updateSourceTexture();
+                final long textureTimestamp = mShaderDrawer.updateSourceTexture();
+                QuestVrBridge.onSourceFrameLatched(textureTimestamp);
             } else {
                 mShaderDrawer.onDrawFrame();
                 flipBuffers();

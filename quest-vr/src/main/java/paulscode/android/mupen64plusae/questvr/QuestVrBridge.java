@@ -42,6 +42,12 @@ public final class QuestVrBridge {
         }
     }
 
+    public static void onSourceFrameLatched(long textureTimestampNanos) {
+        if (sLibraryLoaded) {
+            nativeOnSourceFrameLatched(textureTimestampNanos);
+        }
+    }
+
     public static void configure(QuestVrSettings.Configuration configuration) {
         if (sLibraryLoaded) {
             nativeConfigure(configuration.stereoEnabled, configuration.ipdMeters,
@@ -78,6 +84,7 @@ public final class QuestVrBridge {
 
     private static native boolean nativeInitialize(Activity activity);
     private static native void nativeSetSourceTexture(int texture, int width, int height, boolean requestStereo);
+    private static native void nativeOnSourceFrameLatched(long textureTimestampNanos);
     private static native void nativeConfigure(boolean stereoEnabled, float ipdMeters,
             float worldUnitsPerMeter, float rotationStrength, boolean positionEnabled,
             float maxTranslationMeters, float cameraOffsetXMeters, float cameraOffsetYMeters,

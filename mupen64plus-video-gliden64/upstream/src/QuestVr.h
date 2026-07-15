@@ -20,6 +20,7 @@ void setViewport(int x, int y, int width, int height);
 void setScissor(int x, int y, int width, int height);
 void setScissorEnabled(bool enabled);
 void resetGraphicsState();
+void markFramePresented();
 
 /**
  * Duplicates a GL draw into side-by-side eye viewports. Geometry scopes also

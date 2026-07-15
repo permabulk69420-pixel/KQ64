@@ -49,6 +49,26 @@ struct Vector3 {
 	float z;
 };
 
+struct RuntimeViewState {
+	Vector3 position{};
+	float angleLeft{-0.8f};
+	float angleRight{0.8f};
+	float angleUp{0.8f};
+	float angleDown{-0.8f};
+};
+
+struct FramePoseState {
+	bool valid{false};
+	bool haveRuntimeViews{false};
+	unsigned int generation{0};
+	std::int64_t timestamp{0};
+	Quaternion orientation{0.0f, 0.0f, 0.0f, 1.0f};
+	Quaternion recenterOrientation{0.0f, 0.0f, 0.0f, 1.0f};
+	Vector3 position{};
+	Vector3 recenterPosition{};
+	std::array<RuntimeViewState, 2> views{};
+};
+
 struct ProgramUniforms {
 	GLint enabled{-1};
 	GLint transformEnabled{-1};
@@ -91,17 +111,24 @@ std::atomic<float> s_cameraOffsetY{0.0f};
 std::atomic<float> s_cameraOffsetZ{0.0f};
 std::atomic<float> s_marioKartCameraOffsetY{-0.20f};
 std::atomic<float> s_marioKartCameraOffsetZ{-0.75f};
-std::atomic<unsigned int> s_poseGeneration{1};
+std::atomic<unsigned int> s_poseGeneration{0};
 std::atomic<unsigned int> s_configGeneration{1};
 std::atomic<unsigned int> s_geometryDraws{0};
 std::atomic<unsigned int> s_rectangleDraws{0};
 std::atomic<unsigned int> s_eyeDraws{0};
 std::atomic<unsigned int> s_targetWidthFallbacks{0};
 std::atomic<unsigned int> s_lastTargetWidth{0};
+std::atomic<std::int64_t> s_poseTimestamp{0};
+std::atomic<std::int64_t> s_transformPoseTimestamp{0};
+std::atomic<std::int64_t> s_presentedPoseTimestamp{0};
 
 AtomicPose s_pose;
 AtomicPose s_recenterPose;
 std::array<AtomicView, 2> s_runtimeViews;
+std::array<AtomicView, 2> s_pendingRuntimeViews;
+std::atomic<bool> s_havePendingRuntimeViews{false};
+std::atomic<bool> s_framePoseNeedsLatch{true};
+FramePoseState s_framePose;
 RectState s_viewport;
 RectState s_scissor;
 bool s_scissorEnabled{false};
@@ -114,6 +141,7 @@ std::unordered_map<GLuint, FramebufferTarget> s_framebufferTargets;
 
 struct TransformCache {
 	bool valid{false};
+	bool marioKartWorldPass{false};
 	unsigned int poseGeneration{0};
 	unsigned int configGeneration{0};
 	std::array<float, 16> projection{};
@@ -198,6 +226,28 @@ Vector3 loadViewPosition(const AtomicView& view)
 		view.pz.load(std::memory_order_relaxed)};
 }
 
+RuntimeViewState loadRuntimeView(const AtomicView& view)
+{
+	return {
+		loadViewPosition(view),
+		view.angleLeft.load(std::memory_order_relaxed),
+		view.angleRight.load(std::memory_order_relaxed),
+		view.angleUp.load(std::memory_order_relaxed),
+		view.angleDown.load(std::memory_order_relaxed),
+	};
+}
+
+void storeRuntimeView(AtomicView& destination, const RuntimeViewState& source)
+{
+	destination.px.store(source.position.x, std::memory_order_relaxed);
+	destination.py.store(source.position.y, std::memory_order_relaxed);
+	destination.pz.store(source.position.z, std::memory_order_relaxed);
+	destination.angleLeft.store(source.angleLeft, std::memory_order_relaxed);
+	destination.angleRight.store(source.angleRight, std::memory_order_relaxed);
+	destination.angleUp.store(source.angleUp, std::memory_order_relaxed);
+	destination.angleDown.store(source.angleDown, std::memory_order_relaxed);
+}
+
 void storePose(AtomicPose& destination, const Quaternion& orientation, const Vector3& position)
 {
 	destination.qx.store(orientation.x, std::memory_order_relaxed);
@@ -207,6 +257,33 @@ void storePose(AtomicPose& destination, const Quaternion& orientation, const Vec
 	destination.px.store(position.x, std::memory_order_relaxed);
 	destination.py.store(position.y, std::memory_order_relaxed);
 	destination.pz.store(position.z, std::memory_order_relaxed);
+}
+
+void latchFramePose()
+{
+	if (!s_framePoseNeedsLatch.exchange(false, std::memory_order_acq_rel) && s_framePose.valid)
+		return;
+
+	unsigned int generationBefore = 0;
+	unsigned int generationAfter = 0;
+	do {
+		generationBefore = s_poseGeneration.load(std::memory_order_acquire);
+		if ((generationBefore & 1U) != 0)
+			continue;
+		s_framePose.orientation = loadOrientation(s_pose);
+		s_framePose.recenterOrientation = loadOrientation(s_recenterPose);
+		s_framePose.position = loadPosition(s_pose);
+		s_framePose.recenterPosition = loadPosition(s_recenterPose);
+		s_framePose.haveRuntimeViews = s_haveRuntimeViews.load(std::memory_order_acquire);
+		for (unsigned int eye = 0; eye < 2; ++eye)
+			s_framePose.views[eye] = loadRuntimeView(s_runtimeViews[eye]);
+		s_framePose.timestamp = s_poseTimestamp.load(std::memory_order_relaxed);
+		generationAfter = s_poseGeneration.load(std::memory_order_acquire);
+	} while (generationBefore != generationAfter || (generationAfter & 1U) != 0);
+
+	s_framePose.generation = generationAfter;
+	s_framePose.valid = true;
+	s_transformPoseTimestamp.store(s_framePose.timestamp, std::memory_order_release);
 }
 
 void identity(float* matrix)
@@ -300,10 +377,10 @@ bool isPerspectiveProjection(const float* projection)
 	return std::abs(projection[11]) >= 0.5f && std::abs(projection[15]) <= 0.001f;
 }
 
-void applyRuntimeProjection(unsigned int eye, float* projection)
+void applyRuntimeProjection(unsigned int eye, const FramePoseState& framePose, float* projection)
 {
 	if (!s_useOpenXrFov.load(std::memory_order_relaxed) ||
-		!s_haveRuntimeViews.load(std::memory_order_acquire))
+		!framePose.haveRuntimeViews)
 		return;
 
 	// GLideN64 projection matrices use OpenGL column-major layout. Only replace the angular
@@ -311,11 +388,11 @@ void applyRuntimeProjection(unsigned int eye, float* projection)
 	// HUD/background projections alone.
 	if (!isPerspectiveProjection(projection))
 		return;
-	const AtomicView& view = s_runtimeViews[std::min(eye, 1U)];
-	const float tanLeft = std::tan(view.angleLeft.load(std::memory_order_relaxed));
-	const float tanRight = std::tan(view.angleRight.load(std::memory_order_relaxed));
-	const float tanUp = std::tan(view.angleUp.load(std::memory_order_relaxed));
-	const float tanDown = std::tan(view.angleDown.load(std::memory_order_relaxed));
+	const RuntimeViewState& view = framePose.views[std::min(eye, 1U)];
+	const float tanLeft = std::tan(view.angleLeft);
+	const float tanRight = std::tan(view.angleRight);
+	const float tanUp = std::tan(view.angleUp);
+	const float tanDown = std::tan(view.angleDown);
 	const float width = tanRight - tanLeft;
 	const float height = tanUp - tanDown;
 	if (!std::isfinite(width) || !std::isfinite(height) || width < 0.01f || height < 0.01f)
@@ -326,17 +403,18 @@ void applyRuntimeProjection(unsigned int eye, float* projection)
 	projection[9] = (tanUp + tanDown) / height;
 }
 
-void buildEyeTransform(unsigned int eye, const float* projection, float* destination)
+void buildEyeTransform(unsigned int eye, const FramePoseState& framePose,
+	bool marioKartWorldPass, const float* projection, float* destination)
 {
-	const Quaternion recenterOrientation = loadOrientation(s_recenterPose);
-	const Quaternion currentOrientation = loadOrientation(s_pose);
+	const Quaternion recenterOrientation = framePose.recenterOrientation;
+	const Quaternion currentOrientation = framePose.orientation;
 	Quaternion headOrientation = multiply(conjugate(recenterOrientation), currentOrientation);
 	headOrientation = scaleRotation(headOrientation, s_rotationStrength.load(std::memory_order_relaxed));
 
 	Vector3 headPosition{0.0f, 0.0f, 0.0f};
 	if (s_positionEnabled.load(std::memory_order_relaxed)) {
-		const Vector3 recenterPosition = loadPosition(s_recenterPose);
-		const Vector3 currentPosition = loadPosition(s_pose);
+		const Vector3 recenterPosition = framePose.recenterPosition;
+		const Vector3 currentPosition = framePose.position;
 		headPosition = rotate(conjugate(recenterOrientation), {
 			currentPosition.x - recenterPosition.x,
 			currentPosition.y - recenterPosition.y,
@@ -354,11 +432,11 @@ void buildEyeTransform(unsigned int eye, const float* projection, float* destina
 	}
 
 	Vector3 eyeOffset{0.0f, 0.0f, 0.0f};
-	if (s_haveRuntimeViews.load(std::memory_order_acquire)) {
-		const Vector3 currentCenter = loadPosition(s_pose);
-		const Vector3 trackedEye = loadViewPosition(s_runtimeViews[std::min(eye, 1U)]);
-		const Vector3 trackedLeft = loadViewPosition(s_runtimeViews[0]);
-		const Vector3 trackedRight = loadViewPosition(s_runtimeViews[1]);
+	if (framePose.haveRuntimeViews) {
+		const Vector3 currentCenter = framePose.position;
+		const Vector3 trackedEye = framePose.views[std::min(eye, 1U)].position;
+		const Vector3 trackedLeft = framePose.views[0].position;
+		const Vector3 trackedRight = framePose.views[1].position;
 		const float measuredIpd = std::sqrt(
 			(trackedRight.x - trackedLeft.x) * (trackedRight.x - trackedLeft.x) +
 			(trackedRight.y - trackedLeft.y) * (trackedRight.y - trackedLeft.y) +
@@ -377,9 +455,6 @@ void buildEyeTransform(unsigned int eye, const float* projection, float* destina
 	}
 	float profileOffsetY = 0.0f;
 	float profileOffsetZ = 0.0f;
-	const bool marioKartWorldPass = s_marioKartProfileEnabled.load(std::memory_order_relaxed) &&
-		(config.generalEmulation.hacks & hack_MK64) != 0 &&
-		(gSP.geometryMode & G_ZBUFFER) != 0;
 	if (marioKartWorldPass) {
 		if (!s_marioKartProfileLogged.exchange(true, std::memory_order_relaxed))
 			LOG(LOG_MINIMAL, "Quest VR Mario Kart 64 close-chase profile active");
@@ -417,7 +492,7 @@ void buildEyeTransform(unsigned int eye, const float* projection, float* destina
 	}
 	std::array<float, 16> eyeProjection{};
 	std::copy(projection, projection + 16, eyeProjection.begin());
-	applyRuntimeProjection(eye, eyeProjection.data());
+	applyRuntimeProjection(eye, framePose, eyeProjection.data());
 	std::array<float, 16> projectionView{};
 	multiplyMatrices(eyeProjection.data(), view.data(), projectionView.data());
 	multiplyMatrices(projectionView.data(), inverseProjection.data(), destination);
@@ -425,16 +500,23 @@ void buildEyeTransform(unsigned int eye, const float* projection, float* destina
 
 const std::array<float, 16>& getEyeTransform(unsigned int eye)
 {
+	latchFramePose();
 	std::array<float, 16> projection{};
 	std::memcpy(projection.data(), gSP.matrix.projection, sizeof(float) * 16);
-	const unsigned int poseGeneration = s_poseGeneration.load(std::memory_order_acquire);
+	const bool marioKartWorldPass = s_marioKartProfileEnabled.load(std::memory_order_relaxed) &&
+		(config.generalEmulation.hacks & hack_MK64) != 0 &&
+		(gSP.geometryMode & G_ZBUFFER) != 0;
+	const unsigned int poseGeneration = s_framePose.generation;
 	const unsigned int configGeneration = s_configGeneration.load(std::memory_order_acquire);
 	if (!s_transformCache.valid || s_transformCache.poseGeneration != poseGeneration ||
+		s_transformCache.marioKartWorldPass != marioKartWorldPass ||
 		s_transformCache.configGeneration != configGeneration ||
 		std::memcmp(s_transformCache.projection.data(), projection.data(), sizeof(float) * 16) != 0) {
 		s_transformCache.projection = projection;
 		for (unsigned int index = 0; index < 2; ++index)
-			buildEyeTransform(index, projection.data(), s_transformCache.eyes[index].data());
+			buildEyeTransform(index, s_framePose, marioKartWorldPass, projection.data(),
+				s_transformCache.eyes[index].data());
+		s_transformCache.marioKartWorldPass = marioKartWorldPass;
 		s_transformCache.poseGeneration = poseGeneration;
 		s_transformCache.configGeneration = configGeneration;
 		s_transformCache.valid = true;
@@ -613,6 +695,18 @@ void resetGraphicsState()
 	s_renderbufferDimensions.clear();
 	s_framebufferTargets.clear();
 	s_transformCache.valid = false;
+	s_framePose.valid = false;
+	s_framePoseNeedsLatch.store(true, std::memory_order_release);
+}
+
+void markFramePresented()
+{
+	if (!isStereoEnabled())
+		return;
+	s_presentedPoseTimestamp.store(
+		s_transformPoseTimestamp.load(std::memory_order_acquire),
+		std::memory_order_release);
+	s_framePoseNeedsLatch.store(true, std::memory_order_release);
 }
 
 DrawScope::DrawScope(bool transformGeometry)
@@ -688,7 +782,11 @@ extern "C" QUEST_VR_EXPORT void M64PQuestVrSetEnabled(int enabled)
 	if (enabled != 0) {
 		s_recenterRequested.store(true, std::memory_order_release);
 		s_haveRuntimeViews.store(false, std::memory_order_release);
+		s_havePendingRuntimeViews.store(false, std::memory_order_release);
 		s_marioKartProfileLogged.store(false, std::memory_order_relaxed);
+		s_transformPoseTimestamp.store(0, std::memory_order_relaxed);
+		s_presentedPoseTimestamp.store(0, std::memory_order_relaxed);
+		s_framePoseNeedsLatch.store(true, std::memory_order_release);
 	}
 	s_configGeneration.fetch_add(1, std::memory_order_release);
 	LOG(LOG_MINIMAL, "Quest VR geometry path %s", enabled != 0 ? "enabled" : "disabled");
@@ -697,7 +795,8 @@ extern "C" QUEST_VR_EXPORT void M64PQuestVrSetEnabled(int enabled)
 extern "C" QUEST_VR_EXPORT void M64PQuestVrSetPose(float qx, float qy, float qz, float qw,
 	float px, float py, float pz, std::int64_t timestamp)
 {
-	(void)timestamp;
+	// Odd generations mark a publication in progress; the GL thread only latches even snapshots.
+	s_poseGeneration.fetch_add(1, std::memory_order_acq_rel);
 	const Quaternion orientation = normalize({qx, qy, qz, qw});
 	const Vector3 position{px, py, pz};
 	if (s_recenterRequested.exchange(false, std::memory_order_acq_rel) ||
@@ -706,6 +805,12 @@ extern "C" QUEST_VR_EXPORT void M64PQuestVrSetPose(float qx, float qy, float qz,
 		s_haveRecenterPose.store(true, std::memory_order_release);
 	}
 	storePose(s_pose, orientation, position);
+	if (s_havePendingRuntimeViews.load(std::memory_order_acquire)) {
+		for (unsigned int eye = 0; eye < 2; ++eye)
+			storeRuntimeView(s_runtimeViews[eye], loadRuntimeView(s_pendingRuntimeViews[eye]));
+		s_haveRuntimeViews.store(true, std::memory_order_relaxed);
+	}
+	s_poseTimestamp.store(timestamp, std::memory_order_relaxed);
 	s_poseGeneration.fetch_add(1, std::memory_order_release);
 }
 
@@ -720,7 +825,7 @@ extern "C" QUEST_VR_EXPORT void M64PQuestVrSetViews(
 		{{rightPx, rightPy, rightPz, rightAngleLeft, rightAngleRight, rightAngleUp, rightAngleDown}},
 	}};
 	for (unsigned int eye = 0; eye < 2; ++eye) {
-		AtomicView& destination = s_runtimeViews[eye];
+		AtomicView& destination = s_pendingRuntimeViews[eye];
 		destination.px.store(views[eye][0], std::memory_order_relaxed);
 		destination.py.store(views[eye][1], std::memory_order_relaxed);
 		destination.pz.store(views[eye][2], std::memory_order_relaxed);
@@ -729,8 +834,7 @@ extern "C" QUEST_VR_EXPORT void M64PQuestVrSetViews(
 		destination.angleUp.store(views[eye][5], std::memory_order_relaxed);
 		destination.angleDown.store(views[eye][6], std::memory_order_relaxed);
 	}
-	s_haveRuntimeViews.store(true, std::memory_order_release);
-	s_poseGeneration.fetch_add(1, std::memory_order_release);
+	s_havePendingRuntimeViews.store(true, std::memory_order_release);
 }
 
 extern "C" QUEST_VR_EXPORT void M64PQuestVrConfigure(int stereoEnabled, float ipdMeters,
@@ -776,4 +880,9 @@ extern "C" QUEST_VR_EXPORT void M64PQuestVrGetStats(unsigned int* geometryDraws,
 		*targetWidthFallbacks = s_targetWidthFallbacks.load(std::memory_order_relaxed);
 	if (lastTargetWidth != nullptr)
 		*lastTargetWidth = s_lastTargetWidth.load(std::memory_order_relaxed);
+}
+
+extern "C" QUEST_VR_EXPORT std::int64_t M64PQuestVrGetPresentedPoseTimestamp()
+{
+	return s_presentedPoseTimestamp.load(std::memory_order_acquire);
 }
