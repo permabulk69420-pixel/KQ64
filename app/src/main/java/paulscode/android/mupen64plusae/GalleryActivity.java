@@ -1244,6 +1244,7 @@ public class GalleryActivity extends AppCompatActivity implements GameSidebarAct
                                   String romHeaderName, byte romCountryCode, String romArtPath, String romGoodName, String romDisplayName,
                                   boolean doRestart, boolean isNetplayEnabled, boolean isNetplayServer) {
         Intent intent = new Intent(this, GameActivity.class);
+        ActivityHelper.configureQuestVrGameIntent(intent);
         intent.putExtra( ActivityHelper.Keys.ROM_PATH, romPath );
         intent.putExtra( ActivityHelper.Keys.ZIP_PATH, zipPath );
         intent.putExtra( ActivityHelper.Keys.ROM_MD5, romMd5 );

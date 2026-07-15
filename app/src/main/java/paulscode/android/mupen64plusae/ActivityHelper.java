@@ -66,6 +66,11 @@ import static android.content.Context.ACTIVITY_SERVICE;
 @SuppressWarnings({"SameParameterValue", "WeakerAccess"})
 public class ActivityHelper
 {
+    public static final String ACTION_QUEST_VR_GAME =
+            "paulscode.android.mupen64plusae.action.QUEST_VR_GAME";
+    public static final String CATEGORY_IMMERSIVE_HMD =
+            "org.khronos.openxr.intent.category.IMMERSIVE_HMD";
+
     /**
      * Keys used to pass data to activities via the intent extras bundle. It's good practice to
      * namespace the keys to avoid conflicts with other apps. By convention this is usually the
@@ -202,6 +207,7 @@ public class ActivityHelper
          boolean doRestart)
     {
         Intent intent = new Intent( context, GameActivity.class );
+        configureQuestVrGameIntent(intent);
         intent.putExtra( Keys.ROM_PATH, romPath );
         intent.putExtra( Keys.ZIP_PATH, zipPath );
         intent.putExtra( Keys.ROM_MD5, romMd5 );
@@ -216,6 +222,19 @@ public class ActivityHelper
         intent.putExtra( Keys.NETPLAY_ENABLED, false );
         intent.putExtra( Keys.NETPLAY_SERVER, false );
         context.startActivity( intent );
+    }
+
+    /**
+     * Marks an explicit GameActivity launch as the same immersive activity declared in the
+     * manifest. Android does not copy an activity's intent-filter action or categories into an
+     * explicit Intent, while OpenXR runtimes use the immersive-HMD category during the Android
+     * activity transition.
+     */
+    public static void configureQuestVrGameIntent(Intent intent)
+    {
+        intent.setAction(ACTION_QUEST_VR_GAME);
+        intent.addCategory(Intent.CATEGORY_DEFAULT);
+        intent.addCategory(CATEGORY_IMMERSIVE_HMD);
     }
     
     static void startAudioPrefsActivity( Context context )
