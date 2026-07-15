@@ -40,8 +40,24 @@ presenter only splits the final external texture after GLideN64 has produced dif
 the two halves. It can also present a monoscopic source as an integration fallback when GLideN64 is
 not selected or its VR bridge is not loaded.
 
-No Quest 3 device validation has happened yet. Treat the APK as an instrumented prototype until the
-first on-device logs and screenshots are available.
+Quest 3 validation has confirmed that the Android emulator and Mario Kart 64 continue running, but
+builds through `99e17935` remained in the Quest loading environment without a visible OpenXR layer.
+The `quest-vr-first-frame-debug` build did not isolate swapchain rendering: its red/blue clear still
+sat behind `shouldRender`, successful `xrLocateViews`, an exact two-view count, and both pose-valid
+flags. The current build fixes that blind spot and the Android launch mismatch:
+
+- every explicit `GameActivity` launch now carries the manifest's OpenXR action, default category,
+  and `IMMERSIVE_HMD` category;
+- a second `VIEW` reference space provides a head-locked projection fallback when tracked local-space
+  views are not yet valid;
+- the first 180 projection layers clear the left eye red and right eye blue, then automatically
+  switch to the emulator texture;
+- fallback layers continue with the emulator texture after that interval, so temporary tracking
+  invalidity no longer forces zero-layer frames;
+- session, `shouldRender`, locate-view fallback, first-layer, EGL, GLES, and OpenXR failures now leave
+  concise logcat breadcrumbs.
+
+This build still needs a Quest 3 retest. Treat it as an instrumented prototype rather than a release.
 
 ## Existing renderer architecture
 
@@ -85,6 +101,7 @@ The module uses the loader's Prefab CMake target and implements:
 - HMD system discovery and GLES requirements validation;
 - a session bound to the exact EGL display/config/context used by `GameSurface`;
 - a local reference space;
+- a view reference space used only for head-locked bootstrap/fallback presentation;
 - one recommended-resolution GLES swapchain per primary-stereo view;
 - event-driven session begin/end and instance-loss handling;
 - `xrWaitFrame`, `xrBeginFrame`, `xrLocateViews`, image acquire/wait/release, and `xrEndFrame`;
@@ -96,6 +113,11 @@ The module uses the loader's Prefab CMake target and implements:
 - runtime exit/loss propagation that stops the OpenXR frame retry loop and returns to Android
   presentation;
 - clean resource destruction before the EGL context is destroyed.
+
+The frame loop follows `frameState.shouldRender`. Once the runtime permits rendering, it always has
+a valid two-view composition path: tracked views use `LOCAL`, while unavailable/invalid tracked views
+use conservative identity eye poses in `VIEW`. This avoids the former behavior where a transient or
+unreported tracking-validity flag silently made every `xrEndFrame` submit zero layers.
 
 The bridge retains loader references to the resolved GLideN64 and Android input plugins until VR
 shutdown, so activity or surface teardown cannot leave cleanup callbacks pointing into an unloaded
@@ -211,6 +233,8 @@ GLideN64 plugin before uploading it as a build artifact. The application already
 - `quest-vr/`: OpenXR loader dependency, JNI bridge, swapchains, pose source, and presentation.
 - `app/src/main/AndroidManifest.xml`: optional head-tracking feature, OpenXR discovery, and immersive
   HMD category.
+- `ActivityHelper.java`, `GalleryActivity.java`, and `CoreService.java`: preserve the OpenXR action
+  and immersive-HMD categories on explicit game and notification launches.
 - `GameSurface.java`: GLES 3/OpenXR selection, VR frame pacing, fallback, and lifecycle cleanup.
 - `ShaderDrawer.java`: separate external-texture latching from normal Android shader presentation.
 - `QuestVrPrefsActivity.java` and `preferences_quest_vr.xml`: on-device developer tuning controls.
@@ -226,7 +250,8 @@ GLideN64 plugin before uploading it as a build artifact. The application already
 
 ## Known limitations and risks
 
-- No on-device validation yet; axis signs, eye order, and world scale may require immediate tuning.
+- The emulator/audio path is validated on Quest 3, but the corrected OpenXR layer path is awaiting
+  its first device test; axis signs, eye order, and world scale may require immediate tuning.
 - OpenXR FOV correction only applies to matrices recognized as perspective projections. Complex
   game-specific projection tricks can still be misclassified.
 - The Mario Kart camera profile is a conservative matrix-pass heuristic, not a reverse-engineered
@@ -256,14 +281,18 @@ GLideN64 plugin before uploading it as a build artifact. The application already
 ## First device test checklist
 
 1. Select GLideN64 and launch Mario Kart 64.
-2. Confirm OpenXR runtime/session/swapchain messages in logcat.
-3. Verify each eye receives the correct half (no inverted stereo); toggle **Swap source eyes** and
+2. Look for roughly 180 compositor frames of solid red in the left eye and blue in the right eye;
+   they should then change automatically to the emulator image.
+3. Confirm OpenXR runtime/session/swapchain messages in logcat. If loading remains, capture lines
+   tagged `M64P-QuestVR`; the periodic state message now distinguishes pre-`READY`,
+   `shouldRender=false`, view fallback, and successful first-layer submission.
+4. Verify each eye receives the correct half (no inverted stereo); toggle **Swap source eyes** and
    relaunch the game if the order is reversed.
-4. Confirm the course geometry has parallax while HUD rectangles remain zero disparity.
-5. Check yaw, pitch, and roll direction from a stationary kart.
-6. Verify Touch A/B, analog steering, Z/R, C buttons, Start, and the two-stick-click recenter chord.
-7. Tune `world_units_per_meter`, IPD, and camera Z offset before enabling positional tracking.
-8. Record emulator FPS, OpenXR cadence, thermals, framebuffer-effect defects, disappearing geometry,
+5. Confirm the course geometry has parallax while HUD rectangles remain zero disparity.
+6. Check yaw, pitch, and roll direction from a stationary kart.
+7. Verify Touch A/B, analog steering, Z/R, C buttons, Start, and the two-stick-click recenter chord.
+8. Tune `world_units_per_meter`, IPD, and camera Z offset before enabling positional tracking.
+9. Record emulator FPS, OpenXR cadence, thermals, framebuffer-effect defects, disappearing geometry,
    and any native crash backtrace.
 
 ## Next implementation steps
