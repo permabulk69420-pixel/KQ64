@@ -6,28 +6,12 @@
         android:version="1" />
 
     <application>
-        <activity
-            android:name="paulscode.android.mupen64plusae.FlatTestGalleryActivity"
-            android:exported="true"
-            android:label="Mupen64Plus AE - Flat Test"
-            android:launchMode="singleTask">
-            <intent-filter>
-                <action android:name="android.intent.action.MAIN" />
-                <category android:name="android.intent.category.LAUNCHER" />
-                <category android:name="android.intent.category.LEANBACK_LAUNCHER" />
-            </intent-filter>
-        </activity>
-
-        <activity
-            android:name="paulscode.android.mupen64plusae.QuestVrTestGalleryActivity"
-            android:exported="true"
-            android:label="Mupen64Plus AE - Quest VR Test"
-            android:launchMode="singleTask">
-            <intent-filter>
-                <action android:name="android.intent.action.MAIN" />
-                <category android:name="android.intent.category.LAUNCHER" />
-                <category android:name="android.intent.category.LEANBACK_LAUNCHER" />
-            </intent-filter>
-        </activity>
+        <!-- Runs before the gallery so every normal ROM launch uses GLideN64, the renderer that
+             contains the Quest stereo bridge. -->
+        <provider
+            android:name="paulscode.android.mupen64plusae.questvr.QuestVrProfileInitializer"
+            android:authorities="${applicationId}.questvr.profileinit"
+            android:exported="false"
+            android:initOrder="100" />
     </application>
 </manifest>
