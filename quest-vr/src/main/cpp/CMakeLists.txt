@@ -3,7 +3,10 @@ project(mupen64plus_quest_vr LANGUAGES C CXX)
 
 find_package(OpenXR REQUIRED CONFIG)
 
-add_library(mupen64plus-quest-vr SHARED QuestVrBridge.cpp)
+add_library(mupen64plus-quest-vr SHARED
+    QuestVrBridge.cpp
+    QuestVrRuntimeBootstrap.cpp
+)
 
 target_compile_definitions(mupen64plus-quest-vr PRIVATE
     XR_USE_PLATFORM_ANDROID
