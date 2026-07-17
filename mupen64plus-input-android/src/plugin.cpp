@@ -25,6 +25,7 @@
 #include <jni.h>
 #include <android/log.h>
 #include <algorithm>
+#include <atomic>
 
 #include "m64p_plugin.h"
 
@@ -110,6 +111,14 @@ static double androidAnalogY[4];
 static bool isAnalogDigital[4];
 static int pluginInitialized = 0;
 static CONTROL* controllerInfos = nullptr;
+
+// OpenXR Touch input is kept separate from the normal Android controller state. The Quest
+// presentation thread publishes this overlay and GetKeys merges it into player one, allowing a
+// paired Bluetooth controller to continue working at the same time.
+static std::atomic<int> questVrInputEnabled{0};
+static std::atomic<unsigned int> questVrButtonMask{0};
+static std::atomic<float> questVrAnalogX{0.0f};
+static std::atomic<float> questVrAnalogY{0.0f};
 
 static const double maxAxis = 85.0;
 
@@ -299,6 +308,10 @@ extern "C" EXPORT m64p_error CALL PluginShutdown()
     if (!pluginInitialized)
         return M64ERR_NOT_INIT;
 
+    questVrInputEnabled.store(0, std::memory_order_release);
+    questVrButtonMask.store(0, std::memory_order_relaxed);
+    questVrAnalogX.store(0.0f, std::memory_order_relaxed);
+    questVrAnalogY.store(0.0f, std::memory_order_relaxed);
     pluginInitialized = 0;
     return M64ERR_SUCCESS;
 }
@@ -352,6 +365,17 @@ void simulateOctagon(double inputX, double inputY, int& outputX, int& outputY)
     outputY = static_cast<int>(ay);
 }
 
+extern "C" EXPORT void CALL M64PQuestVrSetInput(int enabled, unsigned int buttonMask,
+        float analogX, float analogY)
+{
+    // Publish values before the enable flag. Relaxed atomics are sufficient for individually
+    // sampled controls and avoid a data race between the OpenXR and emulation threads.
+    questVrButtonMask.store(buttonMask & 0xffffu, std::memory_order_relaxed);
+    questVrAnalogX.store(std::max(-1.0f, std::min(1.0f, analogX)), std::memory_order_relaxed);
+    questVrAnalogY.store(std::max(-1.0f, std::min(1.0f, analogY)), std::memory_order_relaxed);
+    questVrInputEnabled.store(enabled != 0 ? 1 : 0, std::memory_order_release);
+}
+
 extern "C" EXPORT void CALL GetKeys(int controllerNum, BUTTONS* keys)
 {
     // Reset the controller state
@@ -364,6 +388,11 @@ extern "C" EXPORT void CALL GetKeys(int controllerNum, BUTTONS* keys)
         if (androidButtonState[controllerNum][b])
             keys->Value |= BUTTON_BITS[b];
     }
+
+    const bool useQuestVrInput = controllerNum == 0 &&
+            questVrInputEnabled.load(std::memory_order_acquire) != 0;
+    if (useQuestVrInput)
+        keys->Value |= questVrButtonMask.load(std::memory_order_relaxed);
 
     double inputX;
     double inputY;
@@ -395,6 +424,18 @@ extern "C" EXPORT void CALL GetKeys(int controllerNum, BUTTONS* keys)
     } else {
         inputX = androidAnalogX[controllerNum];
         inputY = androidAnalogY[controllerNum];
+    }
+
+    if (useQuestVrInput)
+    {
+        const double xrX = questVrAnalogX.load(std::memory_order_relaxed);
+        const double xrY = questVrAnalogY.load(std::memory_order_relaxed);
+        // A centered Touch stick should not erase input from a simultaneously connected gamepad.
+        if (xrX * xrX + xrY * xrY > 0.01)
+        {
+            inputX = xrX;
+            inputY = xrY;
+        }
     }
 
     simulateOctagon(inputX, inputY, outputX, outputY);

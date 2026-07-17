@@ -61,6 +61,7 @@
     <string name="menuItem_paks_transfer_player4_ram">Player 4 Gameboy RAM</string>
     <string name="menuItem_setIme">Change IME</string>
     <string name="menuItem_exit">Exit</string>
+    <string name="menuItem_questVrRecenter">Recenter Quest VR view</string>
 
     <!-- Input Mapping Activity -->
     <string name="menuItem_deadzone">Deadzone</string>
@@ -228,6 +229,52 @@
     <string name="categoryAudio_title">Audio</string>
     <string name="categoryTouchscreen_title">Touchscreen</string>
     <string name="categoryInput_title">Input</string>
+
+    <!-- Quest VR prototype developer settings -->
+    <string name="questVrSettings_title">Quest VR prototype</string>
+    <string name="questVrSettings_summary">OpenXR stereo, tracking, Mario Kart camera, and diagnostics. Changes apply on the next game launch.</string>
+    <string name="questVrCategory_core">Stereo and scale</string>
+    <string name="questVrCategory_position">Position and camera</string>
+    <string name="questVrCategory_marioKart">Mario Kart 64 profile</string>
+    <string name="questVrCategory_rendering">Rendering and diagnostics</string>
+    <string name="questVrEnabled_title">Enable Quest VR</string>
+    <string name="questVrEnabled_summary">Start OpenXR on a head-tracked Android device; other devices keep normal presentation.</string>
+    <string name="questVrStereo_title">Native stereo geometry</string>
+    <string name="questVrStereo_summary">Render different GLideN64 geometry transforms for the two eyes.</string>
+    <string name="questVrSwapEyes_title">Swap source eyes</string>
+    <string name="questVrSwapEyes_summary">Debug inverted stereo by exchanging the left and right side-by-side source halves.</string>
+    <string name="questVrIpd_title">Stereo separation (metres)</string>
+    <string name="questVrIpd_summary">Virtual eye separation; default 0.064.</string>
+    <string name="questVrWorldScale_title">N64 units per metre</string>
+    <string name="questVrWorldScale_summary">Controls perceived world scale; default 64.</string>
+    <string name="questVrRotation_title">Head rotation strength</string>
+    <string name="questVrRotation_summary">1 follows the headset, 0 disables rotation, and negative values invert it.</string>
+    <string name="questVrPosition_title">Positional head tracking</string>
+    <string name="questVrPosition_summary">Experimental bounded translation; off by default because N64 culling can expose gaps.</string>
+    <string name="questVrMaxTranslation_title">Maximum translation (metres)</string>
+    <string name="questVrMaxTranslation_summary">Comfort and culling limit for positional tracking; default 0.15.</string>
+    <string name="questVrOffsetX_title">Camera X offset (metres)</string>
+    <string name="questVrOffsetX_summary">Global right/left camera offset.</string>
+    <string name="questVrOffsetY_title">Camera Y offset (metres)</string>
+    <string name="questVrOffsetY_summary">Global up/down camera offset.</string>
+    <string name="questVrOffsetZ_title">Camera Z offset (metres)</string>
+    <string name="questVrOffsetZ_summary">Global forward/back camera offset.</string>
+    <string name="questVrMarioKart_title">Mario Kart close-chase profile</string>
+    <string name="questVrMarioKart_summary">Apply title-scoped camera offsets to probable Z-buffered world passes.</string>
+    <string name="questVrMarioKartY_title">Mario Kart Y offset (metres)</string>
+    <string name="questVrMarioKartY_summary">Default -0.20; tune after checking kart and horizon height.</string>
+    <string name="questVrMarioKartZ_title">Mario Kart Z offset (metres)</string>
+    <string name="questVrMarioKartZ_summary">Default -0.75; tune after checking chase-camera distance.</string>
+    <string name="questVrOpenXrFov_title">Use OpenXR per-eye FOV</string>
+    <string name="questVrOpenXrFov_summary">Replace angular projection terms while retaining N64 depth mapping.</string>
+    <string name="questVrSourceScale_title">Stereo source width scale</string>
+    <string name="questVrSourceScale_summary">Experimental 1–2 multiplier. Values above 1 can greatly increase offscreen fill cost.</string>
+    <string name="questVrSourceMaximum_title">Maximum source width</string>
+    <string name="questVrSourceMaximum_summary">Even-pixel cap for the full side-by-side source; default 4096.</string>
+    <string name="questVrTouch_title">Quest controller fallback</string>
+    <string name="questVrTouch_summary">Map OpenXR Touch actions into normal N64 player-one input.</string>
+    <string name="questVrDebug_title">Periodic VR diagnostics</string>
+    <string name="questVrDebug_summary">Log pose association, draw counts, target sizes, and native frame timing.</string>
 
     <string name="categoryData_title">Data</string>
     <string name="categoryNetplay_title">Netplay</string>

@@ -127,4 +127,9 @@
         android:summary="@string/videoPolygonOffset_summary"
         android:title="@string/videoPolygonOffset_title" />
 
+    <androidx.preference.Preference
+        android:key="questVrSettings"
+        android:summary="@string/questVrSettings_summary"
+        android:title="@string/questVrSettings_title" />
+
 </androidx.preference.PreferenceScreen>

@@ -7,6 +7,7 @@
 #include "DisplayWindow.h"
 #include "PluginAPI.h"
 #include "FrameBuffer.h"
+#include "QuestVr.h"
 
 bool DisplayWindow::start()
 {
@@ -48,6 +49,7 @@ void DisplayWindow::swapBuffers()
 {
 	m_drawer.drawOSD();
 	m_drawer.clearStatistics();
+	QuestVr::markFramePresented();
 	_swapBuffers();
 	if (!RSP.LLE) {
 		if ((config.generalEmulation.hacks & hack_doNotResetOtherModeL) == 0)

@@ -3,6 +3,7 @@
 #include "GLFunctions.h"
 #include "opengl_GLInfo.h"
 #include "opengl_CachedFunctions.h"
+#include "QuestVr.h"
 
 using namespace graphics;
 using namespace opengl;
@@ -167,6 +168,7 @@ void CachedVertexAttribArray::reset()
 
 void CachedUseProgram::useProgram(graphics::ObjectHandle _program)
 {
+	QuestVr::setCurrentProgram(GLuint(_program));
 	if (update(_program))
 		glUseProgram(GLuint(_program));
 }

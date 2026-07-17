@@ -13,6 +13,7 @@
 #endif
 #include "opengl_ColorBufferReaderWithReadPixels.h"
 #include "opengl_Utils.h"
+#include "QuestVr.h"
 #include "GLSL/glsl_CombinerProgramBuilderAccurate.h"
 #include "GLSL/glsl_CombinerProgramBuilderFast.h"
 #include "GLSL/glsl_SpecialShadersFactory.h"
@@ -40,6 +41,7 @@ ContextImpl::~ContextImpl()
 
 void ContextImpl::init()
 {
+	QuestVr::resetGraphicsState();
 	m_clampMode = graphics::ClampMode::ClippingEnabled;
 	m_glInfo.init();
 
@@ -128,6 +130,8 @@ graphics::ClampMode ContextImpl::getClampMode()
 void ContextImpl::enable(graphics::EnableParam _parameter, bool _enable)
 {
 	m_cachedFunctions->getCachedEnable(_parameter)->enable(_enable);
+	if (_parameter == graphics::enable::SCISSOR_TEST)
+		QuestVr::setScissorEnabled(_enable);
 }
 
 u32 ContextImpl::isEnabled(graphics::EnableParam _parameter)
@@ -153,11 +157,13 @@ void ContextImpl::setDepthCompare(graphics::CompareParam _mode)
 void ContextImpl::setViewport(s32 _x, s32 _y, s32 _width, s32 _height)
 {
 	m_cachedFunctions->getCachedViewport()->setViewport(_x, _y, _width, _height);
+	QuestVr::setViewport(_x, _y, _width, _height);
 }
 
 void ContextImpl::setScissor(s32 _x, s32 _y, s32 _width, s32 _height)
 {
 	m_cachedFunctions->getCachedScissor()->setScissor(_x, _y, _width, _height);
+	QuestVr::setScissor(_x, _y, _width, _height);
 }
 
 void ContextImpl::setBlending(graphics::BlendParam _sfactor, graphics::BlendParam _dfactor)
@@ -222,6 +228,7 @@ void ContextImpl::deleteTexture(graphics::ObjectHandle _name)
 	u32 glName(_name);
 	glDeleteTextures(1, &glName);
 	m_init2DTexture->reset(_name);
+	QuestVr::unregisterTexture(glName);
 
 	m_cachedFunctions->getTexParams()->erase(u32(_name));
 }
@@ -229,6 +236,8 @@ void ContextImpl::deleteTexture(graphics::ObjectHandle _name)
 void ContextImpl::init2DTexture(const graphics::Context::InitTextureParams & _params)
 {
 	m_init2DTexture->init2DTexture(_params);
+	QuestVr::registerTexture(u32(_params.handle), static_cast<int>(_params.width),
+		static_cast<int>(_params.height));
 }
 
 void ContextImpl::update2DTexture(const graphics::Context::UpdateTextureDataParams & _params)
@@ -324,6 +333,7 @@ void ContextImpl::deleteFramebuffer(graphics::ObjectHandle _name)
 	if (fbo != 0) {
 		glDeleteFramebuffers(1, &fbo);
 		m_cachedFunctions->getCachedBindFramebuffer()->reset();
+		QuestVr::unregisterFramebuffer(fbo);
 	}
 }
 
@@ -335,6 +345,7 @@ void ContextImpl::bindFramebuffer(graphics::BufferTargetParam _target, graphics:
 		glClear(GL_DEPTH_BUFFER_BIT);
 	}
 	m_cachedFunctions->getCachedBindFramebuffer()->bind(_target, _name);
+	QuestVr::setFramebufferBinding(u32(_target), u32(_name));
 }
 
 graphics::ObjectHandle ContextImpl::createRenderbuffer()
@@ -345,16 +356,40 @@ graphics::ObjectHandle ContextImpl::createRenderbuffer()
 void ContextImpl::initRenderbuffer(const graphics::Context::InitRenderbufferParams & _params)
 {
 	m_initRenderbuffer->initRenderbuffer(_params);
+	QuestVr::registerRenderbuffer(u32(_params.handle), static_cast<int>(_params.width),
+		static_cast<int>(_params.height));
 }
 
 void ContextImpl::addFrameBufferRenderTarget(const graphics::Context::FrameBufferRenderTarget & _params)
 {
 	m_addFramebufferRenderTarget->addFrameBufferRenderTarget(_params);
+	QuestVr::registerFramebufferTarget(u32(_params.bufferHandle), u32(_params.attachment),
+		u32(_params.textureTarget), u32(_params.textureHandle));
+#ifdef OS_ANDROID
+	// GLES uses the bind-to-edit framebuffer path, so attaching a target also changes
+	// the current framebuffer binding.
+	QuestVr::setFramebufferBinding(u32(_params.bufferTarget), u32(_params.bufferHandle));
+#endif
 }
 
 bool ContextImpl::blitFramebuffers(const graphics::Context::BlitFramebuffersParams & _params)
 {
-	return m_blitFramebuffers->blitFramebuffers(_params);
+	bool result = true;
+	QuestVr::BlitScope stereoBlit(u32(_params.readBuffer), u32(_params.drawBuffer));
+	for (u32 eye = 0; eye < stereoBlit.eyeCount(); ++eye) {
+		graphics::Context::BlitFramebuffersParams eyeParams = _params;
+		eyeParams.srcX0 = stereoBlit.mapSourceX(_params.srcX0, eye);
+		eyeParams.srcX1 = stereoBlit.mapSourceX(_params.srcX1, eye);
+		eyeParams.dstX0 = stereoBlit.mapDestinationX(_params.dstX0, eye);
+		eyeParams.dstX1 = stereoBlit.mapDestinationX(_params.dstX1, eye);
+		if (!m_blitFramebuffers->blitFramebuffers(eyeParams)) {
+			result = false;
+			break;
+		}
+	}
+	QuestVr::setFramebufferBinding(u32(graphics::bufferTarget::DRAW_FRAMEBUFFER),
+		u32(_params.drawBuffer));
+	return result;
 }
 
 void ContextImpl::setDrawBuffers(u32 _num)

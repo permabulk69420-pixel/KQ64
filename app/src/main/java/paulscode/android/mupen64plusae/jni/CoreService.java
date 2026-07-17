@@ -940,6 +940,7 @@ public class CoreService extends Service implements CoreInterface.OnFpsChangedLi
 
         //Intent for resuming game
         Intent notificationIntent = new Intent(this, GameActivity.class);
+        ActivityHelper.configureQuestVrGameIntent(notificationIntent);
         notificationIntent.putExtra( ActivityHelper.Keys.ROM_PATH, mRomPath );
         notificationIntent.putExtra( ActivityHelper.Keys.ZIP_PATH, mZipPath );
         notificationIntent.putExtra( ActivityHelper.Keys.ROM_MD5, mRomMd5 );

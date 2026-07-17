@@ -1,0 +1,1 @@
+-keep class paulscode.android.mupen64plusae.questvr.QuestVrBridge { *; }

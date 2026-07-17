@@ -6,6 +6,7 @@
 #include <Graphics/OpenGLContext/opengl_Utils.h>
 #include "glsl_Utils.h"
 #include "glsl_CombinerProgramImpl.h"
+#include "QuestVr.h"
 
 using namespace glsl;
 
@@ -21,11 +22,13 @@ CombinerProgramImpl::CombinerProgramImpl(const CombinerKey & _key,
 , m_inputs(_inputs)
 , m_uniforms(std::move(_uniforms))
 {
+	QuestVr::registerProgram(_program);
 }
 
 
 CombinerProgramImpl::~CombinerProgramImpl()
 {
+	QuestVr::unregisterProgram(GLuint(m_program));
 	m_useProgram->useProgram(graphics::ObjectHandle::null);
 	glDeleteProgram(GLuint(m_program));
 }

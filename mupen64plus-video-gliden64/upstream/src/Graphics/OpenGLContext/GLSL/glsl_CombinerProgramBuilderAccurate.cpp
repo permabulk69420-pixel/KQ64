@@ -30,6 +30,12 @@ public:
 			"uniform mediump vec2 uVScale;						\n"
 			"uniform mediump vec2 uAdjustTrans;					\n"
 			"uniform mediump vec2 uAdjustScale;					\n"
+			"uniform lowp int uQuestVrEnabled;\n"
+			"uniform lowp int uQuestVrTransformEnabled;\n"
+			"uniform highp vec4 uQuestVrClipRow0;\n"
+			"uniform highp vec4 uQuestVrClipRow1;\n"
+			"uniform highp vec4 uQuestVrClipRow2;\n"
+			"uniform highp vec4 uQuestVrClipRow3;\n"
 			"uniform lowp ivec2 uCacheFrameBuffer;				\n"
 			"OUT highp vec2 vTexCoord;							\n"
 			"OUT mediump vec2 vLodTexCoord;						\n"
@@ -45,6 +51,13 @@ public:
 			"void main()													\n"
 			"{																\n"
 			"  gl_Position = aPosition;										\n"
+			"  if (uQuestVrTransformEnabled != 0 && aModify[0] == 0.0) {\n"
+			"    highp vec4 questVrPosition = gl_Position;\n"
+			"    gl_Position = vec4(dot(uQuestVrClipRow0, questVrPosition),\n"
+			"      dot(uQuestVrClipRow1, questVrPosition),\n"
+			"      dot(uQuestVrClipRow2, questVrPosition),\n"
+			"      dot(uQuestVrClipRow3, questVrPosition));\n"
+			"  }\n"
 			"  vShadeColor = aColor;										\n"
 			"  vec2 texCoord = aTexCoord;									\n"
 			"  texCoord *= uTexScale;										\n"
@@ -102,12 +115,17 @@ public:
 			m_part += "OUT lowp vec4 vShadeColorNoperspective;				\n";
 		m_part +=
 			"uniform lowp vec4 uRectColor;						\n"
+			"uniform lowp int uQuestVrEnabled;\n"
+			"uniform lowp int uQuestVrEye;\n"
+			"uniform lowp ivec2 uCacheFrameBuffer;\n"
 			"void main()										\n"
 			"{													\n"
 			"  gl_Position = aRectPosition;						\n"
 			"  vShadeColor = uRectColor;						\n"
 			"  vShadeColorNoperspective = uRectColor;			\n"
 			"  vTexCoord = aTexCoord0;							\n"
+			"  if (uQuestVrEnabled != 0 && uCacheFrameBuffer.x != 0)\n"
+			"    vTexCoord.x = vTexCoord.x * 0.5 + float(uQuestVrEye) * 0.5;\n"
 			"  vBaryCoords = vec4(aBaryCoords, vec2(1.0) - aBaryCoords);	\n"
 			;
 	}
@@ -167,6 +185,10 @@ public:
 			"uniform highp vec2 uCacheOffset[2];	\n"
 			"uniform lowp int uUseTexCoordBounds;	\n"
 			"uniform highp vec4 uTexCoordBounds;	\n"
+			"uniform lowp int uQuestVrEnabled;	\n"
+			"uniform lowp int uQuestVrEye;	\n"
+			"uniform lowp ivec2 uCacheFrameBuffer;	\n"
+			"uniform highp vec2 uQuestVrTextureSize;	\n"
 			"uniform lowp int uScreenSpaceTriangle;	\n"
 			"highp vec2 texCoord0;					\n"
 			"highp vec2 texCoord1;					\n"
@@ -1174,6 +1196,13 @@ public:
 	{
 		m_part =
 			"textureEngine0(mTexCoord, tcData0); \n"
+			"if (uQuestVrEnabled != 0 && uCacheFrameBuffer.x != 0) { \n"
+			"  highp float questVrEyeOffset = float(uQuestVrEye) * 0.5 * uQuestVrTextureSize.x; \n"
+			"  tcData0[0].x = tcData0[0].x * 0.5 + questVrEyeOffset; \n"
+			"  tcData0[1].x = tcData0[1].x * 0.5 + questVrEyeOffset; \n"
+			"  tcData0[2].x = tcData0[2].x * 0.5 + questVrEyeOffset; \n"
+			"  tcData0[3].x = tcData0[3].x * 0.5 + questVrEyeOffset; \n"
+			"} \n"
 			;
 	}
 };
@@ -1184,6 +1213,13 @@ public:
 	{
 		m_part =
 			"textureEngine1(mTexCoord, tcData1); \n"
+			"if (uQuestVrEnabled != 0 && uCacheFrameBuffer.y != 0) { \n"
+			"  highp float questVrEyeOffset = float(uQuestVrEye) * 0.5 * uQuestVrTextureSize.y; \n"
+			"  tcData1[0].x = tcData1[0].x * 0.5 + questVrEyeOffset; \n"
+			"  tcData1[1].x = tcData1[1].x * 0.5 + questVrEyeOffset; \n"
+			"  tcData1[2].x = tcData1[2].x * 0.5 + questVrEyeOffset; \n"
+			"  tcData1[3].x = tcData1[3].x * 0.5 + questVrEyeOffset; \n"
+			"} \n"
 			;
 	}
 };

@@ -21,11 +21,14 @@
 package paulscode.android.mupen64plusae.persistent;
 
 import android.content.Context;
+import android.content.Intent;
 import android.content.SharedPreferences;
 import android.content.SharedPreferences.OnSharedPreferenceChangeListener;
 import android.os.Bundle;
-import androidx.preference.PreferenceManager;
 import android.text.TextUtils;
+
+import androidx.preference.Preference;
+import androidx.preference.PreferenceManager;
 
 import paulscode.android.mupen64plusae.R;
 
@@ -33,13 +36,15 @@ import paulscode.android.mupen64plusae.compat.AppCompatPreferenceActivity;
 import paulscode.android.mupen64plusae.preference.PrefUtil;
 import paulscode.android.mupen64plusae.util.LocaleContextWrapper;
 
-public class DisplayPrefsActivity extends AppCompatPreferenceActivity implements OnSharedPreferenceChangeListener
+public class DisplayPrefsActivity extends AppCompatPreferenceActivity implements
+    OnSharedPreferenceChangeListener, Preference.OnPreferenceClickListener
 {
     // These constants must match the keys used in res/xml/preferences.xml
     private static final String SCREEN_ROOT = "screenRoot";
     private static final String DISPLAY_IMMERSIVE_MODE = "displayImmersiveMode";
     private static final String VIDEO_POLYGON_OFFSET = "videoPolygonOffset";
     private static final String DISPLAY_ORIENTATION = "displayOrientation";
+    private static final String QUEST_VR_SETTINGS = "questVrSettings";
     private static final int VIDEO_HARDWARE_TYPE_CUSTOM = 999;
 
     // App data and user preferences
@@ -99,6 +104,10 @@ public class DisplayPrefsActivity extends AppCompatPreferenceActivity implements
         super.onResume();
 
         mPrefs.registerOnSharedPreferenceChangeListener(this);
+        Preference questVrSettings = findPreference(QUEST_VR_SETTINGS);
+        if (questVrSettings != null) {
+            questVrSettings.setOnPreferenceClickListener(this);
+        }
     }
 
     @Override
@@ -106,6 +115,16 @@ public class DisplayPrefsActivity extends AppCompatPreferenceActivity implements
     {
         // Just refresh the preference screens in place
         refreshViews();
+    }
+
+    @Override
+    public boolean onPreferenceClick(Preference preference)
+    {
+        if (QUEST_VR_SETTINGS.equals(preference.getKey())) {
+            startActivity(new Intent(this, QuestVrPrefsActivity.class));
+            return true;
+        }
+        return false;
     }
 
     private void refreshViews()
