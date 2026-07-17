@@ -10,8 +10,7 @@
             android:name="paulscode.android.mupen64plusae.FlatTestGalleryActivity"
             android:exported="true"
             android:label="Mupen64Plus AE - Flat Test"
-            android:launchMode="singleTask"
-            android:theme="@style/Theme.Mupen64plusaeTheme.NoActionBar">
+            android:launchMode="singleTask">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
@@ -23,8 +22,7 @@
             android:name="paulscode.android.mupen64plusae.QuestVrTestGalleryActivity"
             android:exported="true"
             android:label="Mupen64Plus AE - Quest VR Test"
-            android:launchMode="singleTask"
-            android:theme="@style/Theme.Mupen64plusaeTheme.NoActionBar">
+            android:launchMode="singleTask">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
