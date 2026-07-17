@@ -79,33 +79,35 @@ public final class QuestVrBridge {
             return false;
         }
 
-        // Claim the render-thread lifetime before the window hand-off starts so a racing
+        // Claim the render-thread lifetime before the hand-off begins so a racing
         // SurfaceView.surfaceDestroyed callback cannot tear the EGL context down underneath JNI.
         sPresentationLifecycleOwned = true;
 
-        // Queue a real buffer first: on Quest this is the Android-side visibility handshake that
-        // allows the Activity/window transition to finish before xrCreateSession/xrBeginSession.
+        // Queue one real Android buffer while the original window surface is still current. This
+        // completes the visible Activity side of Quest's 2D-to-immersive transition.
         if (!nativePrimeAndroidSurface()) {
             Log.w(TAG, "Android bootstrap frame failed; attempting OpenXR initialization anyway");
         }
-        awaitImmersiveWindow(activity);
 
-        if (!nativeInitialize(activity)) {
-            sPresentationLifecycleOwned = false;
-            return false;
-        }
-
-        // The Android window was only needed to enter immersive mode. Keep the exact same EGL
-        // display/context/config required by the OpenXR graphics binding, but make it current on a
-        // tiny pbuffer so Quest can retire the SurfaceView without invalidating XR rendering.
+        // Move the exact EGL context that OpenXR will bind onto a persistent pbuffer BEFORE session
+        // creation. Quest may retire the Android window as soon as xrCreateSession is accepted, so
+        // parking afterwards leaves a race that looks exactly like a brief flash followed by Home.
         if (!nativeParkEglContext()) {
-            Log.e(TAG, "Unable to park the OpenXR EGL context; shutting down instead of relying on a transient Android window");
-            nativeShutdown();
+            Log.e(TAG, "Unable to park EGL before OpenXR session creation; retaining Android presentation");
+            sPresentationLifecycleOwned = false;
+            return false;
+        }
+        Log.i(TAG, "OpenXR EGL context parked before session creation");
+
+        awaitImmersiveWindow(activity);
+        if (!nativeInitialize(activity)) {
+            if (!nativeReleaseParkedEglContext()) {
+                Log.w(TAG, "Unable to restore Android presentation after failed OpenXR initialization");
+            }
             sPresentationLifecycleOwned = false;
             return false;
         }
 
-        Log.i(TAG, "OpenXR EGL context parked on a persistent pbuffer");
         return true;
     }
 
@@ -135,8 +137,8 @@ public final class QuestVrBridge {
                     configuration.cameraOffsetZMeters, configuration.useOpenXrFov,
                     configuration.marioKartProfileEnabled,
                     configuration.marioKartCameraOffsetYMeters,
-                    configuration.marioKartCameraOffsetZMeters,
-                    configuration.touchControllerEnabled, configuration.debugLogging);
+                    configuration.marioKartCameraOffsetZMeters, configuration.touchControllerEnabled,
+                    configuration.debugLogging);
         }
     }
 
