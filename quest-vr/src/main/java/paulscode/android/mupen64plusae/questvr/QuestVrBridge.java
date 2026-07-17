@@ -17,6 +17,8 @@ public final class QuestVrBridge {
     private static final String HEAD_TRACKING_FEATURE = "android.hardware.vr.headtracking";
     private static final long WINDOW_READY_TIMEOUT_MILLISECONDS = 1000L;
     private static boolean sLibraryLoaded;
+    private static volatile boolean sPresentationLifecycleOwned;
+    private static boolean sSourceTextureLogged;
 
     static {
         try {
@@ -33,6 +35,15 @@ public final class QuestVrBridge {
 
     public static boolean isDeviceCapable(Context context) {
         return sLibraryLoaded && context.getPackageManager().hasSystemFeature(HEAD_TRACKING_FEATURE);
+    }
+
+    /**
+     * True while the OpenXR hand-off owns the render-thread lifetime. Quest may destroy the
+     * temporary Android SurfaceView after accepting immersive presentation; that must not be
+     * interpreted as a request to destroy the OpenXR session.
+     */
+    public static boolean shouldRetainRenderThreadOnSurfaceLoss() {
+        return sPresentationLifecycleOwned;
     }
 
     /**
@@ -68,17 +79,43 @@ public final class QuestVrBridge {
             return false;
         }
 
+        // Claim the render-thread lifetime before the window hand-off starts so a racing
+        // SurfaceView.surfaceDestroyed callback cannot tear the EGL context down underneath JNI.
+        sPresentationLifecycleOwned = true;
+
         // Queue a real buffer first: on Quest this is the Android-side visibility handshake that
         // allows the Activity/window transition to finish before xrCreateSession/xrBeginSession.
         if (!nativePrimeAndroidSurface()) {
             Log.w(TAG, "Android bootstrap frame failed; attempting OpenXR initialization anyway");
         }
         awaitImmersiveWindow(activity);
-        return nativeInitialize(activity);
+
+        if (!nativeInitialize(activity)) {
+            sPresentationLifecycleOwned = false;
+            return false;
+        }
+
+        // The Android window was only needed to enter immersive mode. Keep the exact same EGL
+        // display/context/config required by the OpenXR graphics binding, but make it current on a
+        // tiny pbuffer so Quest can retire the SurfaceView without invalidating XR rendering.
+        if (!nativeParkEglContext()) {
+            Log.e(TAG, "Unable to park the OpenXR EGL context; shutting down instead of relying on a transient Android window");
+            nativeShutdown();
+            sPresentationLifecycleOwned = false;
+            return false;
+        }
+
+        Log.i(TAG, "OpenXR EGL context parked on a persistent pbuffer");
+        return true;
     }
 
     public static void setSourceTexture(int texture, int width, int height, boolean requestStereo) {
         if (sLibraryLoaded) {
+            if (texture != 0 && !sSourceTextureLogged) {
+                Log.i(TAG, "Handing emulator source texture " + texture + " (" + width + "x" + height +
+                        ", stereo=" + requestStereo + ") to OpenXR");
+                sSourceTextureLogged = true;
+            }
             nativeSetSourceTexture(texture, width, height, requestStereo);
         }
     }
@@ -123,11 +160,21 @@ public final class QuestVrBridge {
 
     public static void shutdown() {
         if (sLibraryLoaded) {
-            nativeShutdown();
+            try {
+                nativeShutdown();
+            } finally {
+                if (!nativeReleaseParkedEglContext()) {
+                    Log.w(TAG, "Unable to release the parked OpenXR EGL pbuffer cleanly");
+                }
+                sPresentationLifecycleOwned = false;
+                sSourceTextureLogged = false;
+            }
         }
     }
 
     private static native boolean nativePrimeAndroidSurface();
+    private static native boolean nativeParkEglContext();
+    private static native boolean nativeReleaseParkedEglContext();
     private static native boolean nativeInitialize(Activity activity);
     private static native void nativeSetSourceTexture(int texture, int width, int height, boolean requestStereo);
     private static native void nativeOnSourceFrameLatched(long textureTimestampNanos);
