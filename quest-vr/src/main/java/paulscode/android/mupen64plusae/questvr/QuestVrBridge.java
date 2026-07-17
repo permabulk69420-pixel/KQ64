@@ -2,7 +2,9 @@ package paulscode.android.mupen64plusae.questvr;
 
 import android.app.Activity;
 import android.content.Context;
+import android.os.SystemClock;
 import android.util.Log;
+import android.view.View;
 
 /**
  * Thin Java owner for the optional OpenXR presentation path.
@@ -13,6 +15,7 @@ import android.util.Log;
 public final class QuestVrBridge {
     private static final String TAG = "QuestVrBridge";
     private static final String HEAD_TRACKING_FEATURE = "android.hardware.vr.headtracking";
+    private static final long WINDOW_READY_TIMEOUT_MILLISECONDS = 1000L;
     private static boolean sLibraryLoaded;
 
     static {
@@ -32,8 +35,44 @@ public final class QuestVrBridge {
         return sLibraryLoaded && context.getPackageManager().hasSystemFeature(HEAD_TRACKING_FEATURE);
     }
 
+    /**
+     * Give the Activity transition a bounded opportunity to become attached and focused before
+     * creating the OpenXR session. The render thread may be started by SurfaceView.surfaceCreated
+     * slightly ahead of the final Android window-focus callback during a 2D-to-immersive launch.
+     * Waiting forever here would be a deadlock, so a timeout always falls through to OpenXR.
+     */
+    private static void awaitImmersiveWindow(Activity activity) {
+        final long deadline = SystemClock.uptimeMillis() + WINDOW_READY_TIMEOUT_MILLISECONDS;
+        boolean attached = false;
+        boolean shown = false;
+        boolean focused = false;
+
+        do {
+            final View decor = activity.getWindow().getDecorView();
+            attached = decor != null && decor.isAttachedToWindow() && decor.getWindowToken() != null;
+            shown = decor != null && decor.isShown();
+            focused = activity.hasWindowFocus();
+            if (attached && shown && focused) {
+                Log.i(TAG, "Android immersive window is attached, shown, and focused");
+                return;
+            }
+            SystemClock.sleep(16L);
+        } while (SystemClock.uptimeMillis() < deadline && !activity.isFinishing() && !activity.isDestroyed());
+
+        Log.w(TAG, "OpenXR window readiness wait expired; continuing with attached=" + attached +
+                " shown=" + shown + " focused=" + focused);
+    }
+
     public static boolean initialize(Activity activity) {
-        return sLibraryLoaded && nativeInitialize(activity);
+        if (!sLibraryLoaded) {
+            return false;
+        }
+
+        awaitImmersiveWindow(activity);
+        if (!nativePrimeAndroidSurface()) {
+            Log.w(TAG, "Android bootstrap frame failed; attempting OpenXR initialization anyway");
+        }
+        return nativeInitialize(activity);
     }
 
     public static void setSourceTexture(int texture, int width, int height, boolean requestStereo) {
@@ -86,6 +125,7 @@ public final class QuestVrBridge {
         }
     }
 
+    private static native boolean nativePrimeAndroidSurface();
     private static native boolean nativeInitialize(Activity activity);
     private static native void nativeSetSourceTexture(int texture, int width, int height, boolean requestStereo);
     private static native void nativeOnSourceFrameLatched(long textureTimestampNanos);
