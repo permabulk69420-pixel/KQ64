@@ -1,5 +1,6 @@
 package paulscode.android.mupen64plusae.game;
 
+import android.app.Activity;
 import android.content.Context;
 import android.util.AttributeSet;
 import android.util.Log;
@@ -33,11 +34,33 @@ public final class QuestVrGameSurface extends GameSurface {
         super.surfaceDestroyed(holder);
     }
 
+    private boolean isTransientVrActivityStop() {
+        if (!QuestVrBridge.shouldRetainRenderThreadOnSurfaceLoss() ||
+                QuestVrBridge.isExitRequested()) {
+            return false;
+        }
+        if (!(mContext instanceof Activity)) {
+            return true;
+        }
+        final Activity activity = (Activity) mContext;
+        return !activity.isFinishing() && !activity.isDestroyed();
+    }
+
     @Override
     protected void stopGlContext() {
+        // The normal GameActivity stops its render thread from Activity.onStop. Quest can issue a
+        // transient Android onStop while the accepted OpenXR session is still responsible for the
+        // headset. Treating that callback as final shutdown produces one compositor flash followed
+        // by an immediate return to Home. A real user/app exit sets isFinishing/isDestroyed or the
+        // native runtime exit flag, and still takes the ordinary cleanup path below.
+        if (isTransientVrActivityStop()) {
+            Log.i(TAG, "Ignoring transient Activity stop while OpenXR owns presentation");
+            return;
+        }
+
         // GameSurface historically only stops while the Android Surface is marked available. A VR
-        // hand-off deliberately clears that flag, but Activity.onStop must still be able to perform
-        // the final orderly OpenXR/EGL shutdown.
+        // hand-off deliberately clears that flag, but a final Activity stop must still perform the
+        // orderly OpenXR/EGL shutdown.
         final boolean restoreSurfaceFlag = mGlContextStarted && !mSurfaceAvailable;
         if (restoreSurfaceFlag) {
             mSurfaceAvailable = true;
