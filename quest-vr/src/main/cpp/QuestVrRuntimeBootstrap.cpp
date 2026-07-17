@@ -8,16 +8,19 @@ namespace {
 constexpr const char* TAG = "M64P-QuestVR";
 
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, TAG, __VA_ARGS__)
+#define LOGW(...) __android_log_print(ANDROID_LOG_WARN, TAG, __VA_ARGS__)
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, TAG, __VA_ARGS__)
 
 EGLDisplay gParkingDisplay = EGL_NO_DISPLAY;
 EGLContext gParkingContext = EGL_NO_CONTEXT;
 EGLSurface gParkingSurface = EGL_NO_SURFACE;
+EGLSurface gParkingWindowSurface = EGL_NO_SURFACE;
 
 void clearParkingState() {
     gParkingDisplay = EGL_NO_DISPLAY;
     gParkingContext = EGL_NO_CONTEXT;
     gParkingSurface = EGL_NO_SURFACE;
+    gParkingWindowSurface = EGL_NO_SURFACE;
 }
 
 }  // namespace
@@ -95,12 +98,11 @@ Java_paulscode_android_mupen64plusae_questvr_QuestVrBridge_nativePrimeAndroidSur
 }
 
 /**
- * Move the already-created OpenXR graphics-binding context onto a tiny pbuffer.
+ * Move the OpenXR graphics-binding context onto a tiny pbuffer before session creation.
  *
- * Quest may retire the Activity's Android window Surface immediately after the first immersive
- * projection layer is accepted. Keeping the OpenXR render loop current on that window therefore
- * turns an expected Android lifecycle event into an EGL/session teardown. A pbuffer preserves the
- * same display, context, and config while removing the SurfaceView from the XR render lifetime.
+ * Quest may retire the Activity's Android window Surface as soon as the immersive session is
+ * accepted. Parking first keeps the exact same EGL display/context/config current while removing
+ * the Android SurfaceView from the XR render lifetime, closing the hand-off race entirely.
  */
 extern "C" JNIEXPORT jboolean JNICALL
 Java_paulscode_android_mupen64plusae_questvr_QuestVrBridge_nativeParkEglContext(
@@ -165,6 +167,7 @@ Java_paulscode_android_mupen64plusae_questvr_QuestVrBridge_nativeParkEglContext(
     gParkingDisplay = display;
     gParkingContext = context;
     gParkingSurface = parkingSurface;
+    gParkingWindowSurface = windowSurface;
     LOGI("Moved OpenXR EGL context %p from Android window %p to pbuffer %p (config=%d)",
          context, windowSurface, parkingSurface, configId);
     return JNI_TRUE;
@@ -178,10 +181,25 @@ Java_paulscode_android_mupen64plusae_questvr_QuestVrBridge_nativeReleaseParkedEg
     }
 
     bool success = true;
-    if (eglGetCurrentDisplay() == gParkingDisplay &&
+    const bool parkingContextCurrent = eglGetCurrentDisplay() == gParkingDisplay &&
             eglGetCurrentContext() == gParkingContext &&
-            eglGetCurrentSurface(EGL_DRAW) == gParkingSurface) {
-        if (eglMakeCurrent(gParkingDisplay, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT) != EGL_TRUE) {
+            eglGetCurrentSurface(EGL_DRAW) == gParkingSurface;
+
+    bool restoredWindow = false;
+    if (parkingContextCurrent && gParkingWindowSurface != EGL_NO_SURFACE) {
+        if (eglMakeCurrent(gParkingDisplay, gParkingWindowSurface, gParkingWindowSurface,
+                gParkingContext) == EGL_TRUE) {
+            restoredWindow = true;
+            LOGI("Restored EGL context to Android window after OpenXR parking");
+        } else {
+            LOGW("Android window could not be restored after OpenXR parking (error=0x%x)",
+                 eglGetError());
+        }
+    }
+
+    if (parkingContextCurrent && !restoredWindow) {
+        if (eglMakeCurrent(gParkingDisplay, EGL_NO_SURFACE, EGL_NO_SURFACE,
+                EGL_NO_CONTEXT) != EGL_TRUE) {
             LOGE("Failed to unbind parked OpenXR EGL context (error=0x%x)", eglGetError());
             success = false;
         }
