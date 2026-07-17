@@ -1,11 +1,23 @@
 <?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
     <uses-feature
         android:name="android.hardware.vr.headtracking"
         android:required="false"
         android:version="1" />
 
     <application>
+        <meta-data
+            android:name="com.oculus.supportedDevices"
+            android:value="all" />
+
+        <!-- Meta's native OpenXR sample uses singleTask for the immersive activity so Android never
+             creates competing copies during the 2D-to-VR transition. -->
+        <activity
+            android:name="paulscode.android.mupen64plusae.game.GameActivity"
+            android:launchMode="singleTask"
+            tools:node="merge" />
+
         <!-- Runs before the gallery so every normal ROM launch uses GLideN64, the renderer that
              contains the Quest stereo bridge. -->
         <provider
