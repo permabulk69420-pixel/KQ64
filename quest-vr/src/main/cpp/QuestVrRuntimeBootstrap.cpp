@@ -3,6 +3,8 @@
 #include <EGL/egl.h>
 #include <GLES3/gl3.h>
 
+#include <cstring>
+
 namespace {
 
 constexpr const char* TAG = "M64P-QuestVR";
@@ -15,12 +17,22 @@ EGLDisplay gParkingDisplay = EGL_NO_DISPLAY;
 EGLContext gParkingContext = EGL_NO_CONTEXT;
 EGLSurface gParkingSurface = EGL_NO_SURFACE;
 EGLSurface gParkingWindowSurface = EGL_NO_SURFACE;
+bool gParkingActive = false;
+bool gParkingSurfaceless = false;
 
 void clearParkingState() {
     gParkingDisplay = EGL_NO_DISPLAY;
     gParkingContext = EGL_NO_CONTEXT;
     gParkingSurface = EGL_NO_SURFACE;
     gParkingWindowSurface = EGL_NO_SURFACE;
+    gParkingActive = false;
+    gParkingSurfaceless = false;
+}
+
+bool supportsSurfacelessContext(EGLDisplay display) {
+    const char* extensions = eglQueryString(display, EGL_EXTENSIONS);
+    return extensions != nullptr &&
+            std::strstr(extensions, "EGL_KHR_surfaceless_context") != nullptr;
 }
 
 }  // namespace
@@ -98,16 +110,17 @@ Java_paulscode_android_mupen64plusae_questvr_QuestVrBridge_nativePrimeAndroidSur
 }
 
 /**
- * Move the OpenXR graphics-binding context onto a tiny pbuffer before session creation.
+ * Detach the OpenXR graphics-binding context from the Android window before session creation.
  *
- * Quest may retire the Activity's Android window Surface as soon as the immersive session is
- * accepted. Parking first keeps the exact same EGL display/context/config current while removing
- * the Android SurfaceView from the XR render lifetime, closing the hand-off race entirely.
+ * A pbuffer is preferred because it gives the context a small conventional draw surface. If the
+ * Android-selected EGLConfig does not expose EGL_PBUFFER_BIT, Quest can instead keep the context
+ * current with EGL_KHR_surfaceless_context. OpenXR only renders into its own swapchain FBOs, so the
+ * Android window is not needed after the bootstrap frame.
  */
 extern "C" JNIEXPORT jboolean JNICALL
 Java_paulscode_android_mupen64plusae_questvr_QuestVrBridge_nativeParkEglContext(
         JNIEnv*, jclass) {
-    if (gParkingSurface != EGL_NO_SURFACE) {
+    if (gParkingActive) {
         return JNI_TRUE;
     }
 
@@ -135,55 +148,78 @@ Java_paulscode_android_mupen64plusae_questvr_QuestVrBridge_nativeParkEglContext(
         return JNI_FALSE;
     }
 
+    EGLSurface parkingSurface = EGL_NO_SURFACE;
     EGLint surfaceType = 0;
-    if (eglGetConfigAttrib(display, config, EGL_SURFACE_TYPE, &surfaceType) != EGL_TRUE ||
-            (surfaceType & EGL_PBUFFER_BIT) == 0) {
-        LOGE("Cannot park OpenXR EGL context: EGLConfig %d lacks EGL_PBUFFER_BIT (type=0x%x error=0x%x)",
-             configId, surfaceType, eglGetError());
-        return JNI_FALSE;
-    }
+    const bool supportsPbuffer =
+            eglGetConfigAttrib(display, config, EGL_SURFACE_TYPE, &surfaceType) == EGL_TRUE &&
+            (surfaceType & EGL_PBUFFER_BIT) != 0;
+    if (supportsPbuffer) {
+        const EGLint pbufferAttributes[] = {
+            EGL_WIDTH, 16,
+            EGL_HEIGHT, 16,
+            EGL_NONE,
+        };
+        parkingSurface = eglCreatePbufferSurface(display, config, pbufferAttributes);
+        if (parkingSurface != EGL_NO_SURFACE &&
+                eglMakeCurrent(display, parkingSurface, parkingSurface, context) == EGL_TRUE) {
+            gParkingDisplay = display;
+            gParkingContext = context;
+            gParkingSurface = parkingSurface;
+            gParkingWindowSurface = windowSurface;
+            gParkingActive = true;
+            gParkingSurfaceless = false;
+            LOGI("Moved OpenXR EGL context %p from Android window %p to pbuffer %p (config=%d)",
+                 context, windowSurface, parkingSurface, configId);
+            return JNI_TRUE;
+        }
 
-    const EGLint pbufferAttributes[] = {
-        EGL_WIDTH, 16,
-        EGL_HEIGHT, 16,
-        EGL_NONE,
-    };
-    const EGLSurface parkingSurface = eglCreatePbufferSurface(display, config, pbufferAttributes);
-    if (parkingSurface == EGL_NO_SURFACE) {
-        LOGE("Cannot park OpenXR EGL context: eglCreatePbufferSurface failed (error=0x%x)",
-             eglGetError());
-        return JNI_FALSE;
-    }
-
-    if (eglMakeCurrent(display, parkingSurface, parkingSurface, context) != EGL_TRUE) {
-        const EGLint error = eglGetError();
-        eglDestroySurface(display, parkingSurface);
-        // Best effort: keep normal Android presentation usable when parking fails.
+        const EGLint pbufferError = eglGetError();
+        if (parkingSurface != EGL_NO_SURFACE) {
+            eglDestroySurface(display, parkingSurface);
+            parkingSurface = EGL_NO_SURFACE;
+        }
+        // The failed make-current may have disturbed the binding; restore it before trying the
+        // surfaceless path or returning to ordinary Android presentation.
         eglMakeCurrent(display, windowSurface, windowSurface, context);
-        LOGE("Cannot park OpenXR EGL context: eglMakeCurrent(pbuffer) failed (error=0x%x)", error);
-        return JNI_FALSE;
+        LOGW("Pbuffer parking failed for EGLConfig %d (error=0x%x); trying surfaceless EGL",
+             configId, pbufferError);
+    } else {
+        LOGW("EGLConfig %d lacks EGL_PBUFFER_BIT (type=0x%x); trying surfaceless EGL",
+             configId, surfaceType);
     }
 
-    gParkingDisplay = display;
-    gParkingContext = context;
-    gParkingSurface = parkingSurface;
-    gParkingWindowSurface = windowSurface;
-    LOGI("Moved OpenXR EGL context %p from Android window %p to pbuffer %p (config=%d)",
-         context, windowSurface, parkingSurface, configId);
-    return JNI_TRUE;
+    if (supportsSurfacelessContext(display) &&
+            eglMakeCurrent(display, EGL_NO_SURFACE, EGL_NO_SURFACE, context) == EGL_TRUE) {
+        gParkingDisplay = display;
+        gParkingContext = context;
+        gParkingSurface = EGL_NO_SURFACE;
+        gParkingWindowSurface = windowSurface;
+        gParkingActive = true;
+        gParkingSurfaceless = true;
+        LOGI("Detached OpenXR EGL context %p from Android window %p using surfaceless EGL (config=%d)",
+             context, windowSurface, configId);
+        return JNI_TRUE;
+    }
+
+    const EGLint surfacelessError = eglGetError();
+    eglMakeCurrent(display, windowSurface, windowSurface, context);
+    LOGE("Cannot detach OpenXR EGL context: pbuffer unavailable and surfaceless EGL failed (error=0x%x)",
+         surfacelessError);
+    return JNI_FALSE;
 }
 
 extern "C" JNIEXPORT jboolean JNICALL
 Java_paulscode_android_mupen64plusae_questvr_QuestVrBridge_nativeReleaseParkedEglContext(
         JNIEnv*, jclass) {
-    if (gParkingSurface == EGL_NO_SURFACE) {
+    if (!gParkingActive) {
         return JNI_TRUE;
     }
 
     bool success = true;
+    const EGLSurface expectedSurface = gParkingSurfaceless ? EGL_NO_SURFACE : gParkingSurface;
     const bool parkingContextCurrent = eglGetCurrentDisplay() == gParkingDisplay &&
             eglGetCurrentContext() == gParkingContext &&
-            eglGetCurrentSurface(EGL_DRAW) == gParkingSurface;
+            eglGetCurrentSurface(EGL_DRAW) == expectedSurface;
 
     bool restoredWindow = false;
     if (parkingContextCurrent && gParkingWindowSurface != EGL_NO_SURFACE) {
@@ -205,11 +241,15 @@ Java_paulscode_android_mupen64plusae_questvr_QuestVrBridge_nativeReleaseParkedEg
         }
     }
 
-    if (eglDestroySurface(gParkingDisplay, gParkingSurface) != EGL_TRUE) {
-        LOGE("Failed to destroy parked OpenXR EGL pbuffer (error=0x%x)", eglGetError());
-        success = false;
+    if (gParkingSurface != EGL_NO_SURFACE) {
+        if (eglDestroySurface(gParkingDisplay, gParkingSurface) != EGL_TRUE) {
+            LOGE("Failed to destroy parked OpenXR EGL pbuffer (error=0x%x)", eglGetError());
+            success = false;
+        } else {
+            LOGI("Released parked OpenXR EGL pbuffer");
+        }
     } else {
-        LOGI("Released parked OpenXR EGL pbuffer");
+        LOGI("Released surfaceless OpenXR EGL parking state");
     }
 
     clearParkingState();
