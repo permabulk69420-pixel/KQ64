@@ -47,6 +47,7 @@ Java_paulscode_android_mupen64plusae_questvr_QuestVrBridge_nativePrimeAndroidSur
     GLint previousFramebuffer = 0;
     GLint previousViewport[4] = {0, 0, 0, 0};
     GLfloat previousClearColor[4] = {0.0f, 0.0f, 0.0f, 1.0f};
+    const GLboolean scissorWasEnabled = glIsEnabled(GL_SCISSOR_TEST);
     glGetIntegerv(GL_FRAMEBUFFER_BINDING, &previousFramebuffer);
     glGetIntegerv(GL_VIEWPORT, previousViewport);
     glGetFloatv(GL_COLOR_CLEAR_VALUE, previousClearColor);
@@ -70,6 +71,9 @@ Java_paulscode_android_mupen64plusae_questvr_QuestVrBridge_nativePrimeAndroidSur
     glViewport(previousViewport[0], previousViewport[1], previousViewport[2], previousViewport[3]);
     glClearColor(previousClearColor[0], previousClearColor[1],
                  previousClearColor[2], previousClearColor[3]);
+    if (scissorWasEnabled == GL_TRUE) {
+        glEnable(GL_SCISSOR_TEST);
+    }
 
     if (glError != GL_NO_ERROR || swapped != EGL_TRUE) {
         LOGE("Android window bootstrap frame failed: gl=0x%x egl=0x%x", glError, eglError);
