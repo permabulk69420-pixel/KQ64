@@ -68,10 +68,12 @@ public final class QuestVrBridge {
             return false;
         }
 
-        awaitImmersiveWindow(activity);
+        // Queue a real buffer first: on Quest this is the Android-side visibility handshake that
+        // allows the Activity/window transition to finish before xrCreateSession/xrBeginSession.
         if (!nativePrimeAndroidSurface()) {
             Log.w(TAG, "Android bootstrap frame failed; attempting OpenXR initialization anyway");
         }
+        awaitImmersiveWindow(activity);
         return nativeInitialize(activity);
     }
 
