@@ -75,6 +75,7 @@ struct ProgramUniforms {
 	GLint transformEnabled{-1};
 	GLint screenSpaceTransformEnabled{-1};
 	GLint eye{-1};
+	GLint sourceTexturePacked{-1};
 	std::array<GLint, 4> rows{{-1, -1, -1, -1}};
 };
 
@@ -705,7 +706,7 @@ unsigned int getProgramUniformMask(const ProgramUniforms& uniforms)
 }
 
 bool setProgramEye(unsigned int eye, bool enabled, bool transformGeometry,
-	bool correctScreenSpaceProjection)
+	bool correctScreenSpaceProjection, bool sourceTexturePacked)
 {
 	const auto program = s_programs.find(s_currentProgram);
 	if (program == s_programs.end())
@@ -718,12 +719,16 @@ bool setProgramEye(unsigned int eye, bool enabled, bool transformGeometry,
 			glUniform1i(uniforms.transformEnabled, 0);
 		if (uniforms.screenSpaceTransformEnabled >= 0)
 			glUniform1i(uniforms.screenSpaceTransformEnabled, 0);
+		if (uniforms.sourceTexturePacked >= 0)
+			glUniform1i(uniforms.sourceTexturePacked, 0);
 		return false;
 	}
 	if (uniforms.enabled >= 0)
 		glUniform1i(uniforms.enabled, 1);
 	if (uniforms.eye >= 0)
 		glUniform1i(uniforms.eye, static_cast<GLint>(eye));
+	if (uniforms.sourceTexturePacked >= 0)
+		glUniform1i(uniforms.sourceTexturePacked, sourceTexturePacked ? 1 : 0);
 
 	std::array<float, 16> matrix{};
 	bool applyTransform = false;
@@ -914,6 +919,11 @@ void markPackedFramebufferTexture(unsigned int texture)
 		s_packedFramebufferTextures.insert(texture);
 }
 
+bool isPackedFramebufferTexture(unsigned int texture)
+{
+	return texture != 0 && s_packedFramebufferTextures.count(texture) != 0;
+}
+
 void noteFramebufferAllocation(unsigned int n64Width, unsigned int n64Height,
 	float scale, unsigned int physicalWidth, unsigned int physicalHeight,
 	unsigned int nativeResolutionFactor)
@@ -945,6 +955,8 @@ void registerProgram(unsigned int program)
 	uniforms.screenSpaceTransformEnabled = glGetUniformLocation(program,
 		"uQuestVrScreenSpaceTransformEnabled");
 	uniforms.eye = glGetUniformLocation(program, "uQuestVrEye");
+	uniforms.sourceTexturePacked = glGetUniformLocation(program,
+		"uQuestVrSourceTexturePacked");
 	uniforms.rows[0] = glGetUniformLocation(program, "uQuestVrClipRow0");
 	uniforms.rows[1] = glGetUniformLocation(program, "uQuestVrClipRow1");
 	uniforms.rows[2] = glGetUniformLocation(program, "uQuestVrClipRow2");
@@ -1182,11 +1194,13 @@ int BlitScope::mapDestinationX(int value, unsigned int eye) const
 		: value;
 }
 
-DrawScope::DrawScope(bool transformGeometry, bool correctScreenSpaceProjection)
+DrawScope::DrawScope(bool transformGeometry, bool correctScreenSpaceProjection,
+	bool sourceTexturePacked)
 	: m_active(isStereoEnabled() && isPackedFramebuffer(s_drawFramebuffer) &&
 		s_viewport.width >= 2 && s_viewport.height > 0)
 	, m_transformGeometry(transformGeometry)
 	, m_correctScreenSpaceProjection(correctScreenSpaceProjection)
+	, m_sourceTexturePacked(sourceTexturePacked)
 	, m_targetWidth(getDrawTargetWidth())
 	, m_coordinateWidth(getDrawCoordinateWidth(m_targetWidth))
 {
@@ -1224,7 +1238,8 @@ DrawScope::~DrawScope()
 {
 	if (!m_active)
 		return;
-	setProgramEye(0, false, m_transformGeometry, m_correctScreenSpaceProjection);
+	setProgramEye(0, false, m_transformGeometry, m_correctScreenSpaceProjection,
+		m_sourceTexturePacked);
 	glViewport(s_viewport.x, s_viewport.y, s_viewport.width, s_viewport.height);
 	if (s_scissorEnabled)
 		glScissor(s_scissor.x, s_scissor.y, s_scissor.width, s_scissor.height);
@@ -1266,7 +1281,8 @@ void DrawScope::selectEye(unsigned int eye)
 		glScissor(clampedStart, s_scissor.y, clampedEnd - clampedStart, s_scissor.height);
 	}
 
-	setProgramEye(eye, true, m_transformGeometry, m_correctScreenSpaceProjection);
+	setProgramEye(eye, true, m_transformGeometry, m_correctScreenSpaceProjection,
+		m_sourceTexturePacked);
 }
 
 } // namespace QuestVr

@@ -442,9 +442,17 @@ bool TexrectDrawer::draw()
 
 	Context::DrawRectParameters rectParams;
 	rectParams.mode = drawmode::TRIANGLE_STRIP;
+	// This is the one UI composition step: the source is the explicitly mono
+	// 640x580 texrect scratch texture and the destination is duplicated per eye.
+	// Marking only this draw as screen space gives HUD/menu pixels the OpenXR
+	// optical-centre correction without shifting ordinary rectangles or the
+	// final world framebuffer copy.
+	rectParams.questVrScreenSpace = true;
+	rectParams.questVrSourceTexturePacked = false;
 	rectParams.verticesCount = 4;
 	rectParams.vertices = rect;
 	rectParams.combiner = m_programTex.get();
+	QuestVr::noteScreenSpaceBatch(rectParams.verticesCount);
 	gfxContext.drawRects(rectParams);
 
 	gfxContext.bindFramebuffer(bufferTarget::DRAW_FRAMEBUFFER, m_FBO);
@@ -469,6 +477,7 @@ bool TexrectDrawer::draw()
 	gfxContext.enable(enable::BLEND, false);
 	gfxContext.enable(enable::SCISSOR_TEST, false);
 	rectParams.combiner = m_programClear.get();
+	rectParams.questVrScreenSpace = false;
 	gfxContext.drawRects(rectParams);
 	gfxContext.enable(enable::SCISSOR_TEST, true);
 

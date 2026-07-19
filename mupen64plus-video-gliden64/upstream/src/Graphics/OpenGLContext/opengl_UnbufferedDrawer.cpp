@@ -184,7 +184,8 @@ void UnbufferedDrawer::drawRects(const graphics::Context::DrawRectParameters & _
 	if (m_useCoverage)
 		m_cachedAttribArray->enableVertexAttribArray(triangleAttrib::barycoords, false);
 
-	QuestVr::DrawScope stereoDraw(false);
+	QuestVr::DrawScope stereoDraw(false, _params.questVrScreenSpace,
+		_params.questVrSourceTexturePacked);
 	for (u32 eye = 0; eye < stereoDraw.eyeCount(); ++eye) {
 		stereoDraw.selectEye(eye);
 		glDrawArrays(GLenum(_params.mode), 0, _params.verticesCount);

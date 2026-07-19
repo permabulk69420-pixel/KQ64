@@ -1,28 +1,41 @@
 # Quest VR Mario Kart camera and internal-resolution audit
 
-## Menu/HUD hardware follow-up after `31c9b7a`
+## Menu/HUD hardware follow-up after `b77758e`
 
-The `31c9b7a` Quest test did not include a new diagnostic log, so the headset observations are the
-authority for this follow-up. The race world remained the closest path to working, while menus
-showed roughly half of the expected 4:3 image and fully modified screen-space HUD elements still
-did not fuse.
+The Quest 3S run checked in at `a994c0b` is decisive because it records the build that showed no
+visible improvement. Across the complete Mario Kart session:
 
-Source inspection proves two independent implementation faults:
+- fully modified screen-space triangle batches remained at zero;
+- the `_renderScreenSizeBuffer` / framebuffer-blit diagnostic remained at zero;
+- ordinary rectangle draws reached 54,496;
+- the mono 640x580 texrect scratch path composed 61,289 rectangles in 4,242 batches; and
+- the active internal framebuffer was 2688x1007, or about 1344x1007 per eye.
 
-1. The final packed framebuffer copy supplied the physical 2688-pixel SBS width as a logical
-   source rectangle while supplying the 1344-pixel per-eye width as the destination coordinate
-   space. At 2688x1008 this generated a destination of `[-672, 2016]`. `BlitScope` then performed
-   its normal eye mapping, so both source and destination were effectively split a second time.
-   This matches the enlarged, cropped, overlapping, and transition-offset menu symptoms.
-2. Fully modified triangle batches were correctly classified as screen-space, and the OpenXR FOV
-   correction matrix was uploaded. All three triangle vertex shaders nevertheless applied that
-   matrix only when `aModify.x == 0`. `drawScreenSpaceTriangle` sets `aModify` for every vertex, so
-   the correction was unreachable and the lack of hardware change was expected.
+The previous fixes therefore targeted two paths Mario Kart's menus and racing portraits did not
+use. The active presentation is `FrameBufferList::renderBuffer` followed by
+`GraphicsDrawer::copyTexturedRect`, which draws a textured rectangle rather than calling the
+instrumented blit path.
 
-The corrected presentation uses 1344 logical pixels for both sides of the final per-eye copy and
-lets `BlitScope` perform exactly one physical SBS mapping. A separate screen-space-transform
-uniform applies the HUD correction after modified vertices have been converted to clip space;
-perspective world transforms retain their previous ordering and path.
+That active copy had a concrete double-split. Its packed texture was 2688 pixels wide, while its
+source rectangle was already expressed in one-eye coordinates, normally 0..1344. The rectangle
+code normalized 0..1344 by the physical width 2688, producing UV 0..0.5. The registered Quest copy
+shader then selected an eye by halving that range again. The left eye sampled 0..0.25 and the right
+eye sampled 0.5..0.75: only half of each intended eye image, enlarged to fill the eye. The same
+incorrect physical-width comparison also selected linear filtering for what should be a same-size
+per-eye copy.
+
+The corrected contract keeps allocation width and coordinate width separate. A packed 2688-pixel
+source now has a 1344-pixel coordinate width; the shader performs the sole eye selection. Mono
+framebuffer textures are no longer inferred to be packed merely because they are framebuffer
+textures. The final copy is also recorded by the existing bounded diagnostic, so a new log must
+show a physical/logical source pair near 2688/1344 and a complete 0..1344 source rectangle.
+
+The racing HUD also follows rectangles rather than fully modified triangles. Only the final
+composition of the explicitly mono texrect scratch texture is now marked as screen-space UI and
+registered for the OpenXR optical-centre transform. Ordinary rectangles, framebuffer copies, and
+world geometry are not globally shifted. The next log must show nonzero screen-space batches,
+draws in both eyes, a complete uniform mask, and nonzero correction counters before any claim is
+made about portrait convergence.
 
 The existing screenshot action now captures the complete external-OES producer image before eye
 selection, aspect fitting, and OpenXR submission. It applies Android's actual `SurfaceTexture`

@@ -45,19 +45,33 @@ namespace glsl {
 		VertexShaderTexturedRect(const opengl::GLInfo & _glinfo)
 		{
 			m_part =
-				"IN highp vec4 aRectPosition;	\n"
-				"IN highp vec2 aTexCoord0;		\n"
-				"OUT mediump vec2 vTexCoord0;	\n"
-				"uniform lowp int uQuestVrEnabled;	\n"
-				"uniform lowp int uQuestVrEye;	\n"
-				"void main()					\n"
-				"{								\n"
-				"  gl_Position = aRectPosition;	\n"
-				"  vTexCoord0 = aTexCoord0;		\n"
-				"  if (uQuestVrEnabled != 0)	\n"
-				"    vTexCoord0.x = vTexCoord0.x * 0.5 + float(uQuestVrEye) * 0.5;	\n"
-				"}								\n"
-			;
+				"IN highp vec4 aRectPosition;\n"
+				"IN highp vec2 aTexCoord0;\n"
+				"OUT mediump vec2 vTexCoord0;\n"
+				"uniform lowp int uQuestVrEnabled;\n"
+				"uniform lowp int uQuestVrEye;\n"
+				"uniform lowp int uQuestVrSourceTexturePacked;\n"
+				"uniform lowp int uQuestVrTransformEnabled;\n"
+				"uniform lowp int uQuestVrScreenSpaceTransformEnabled;\n"
+				"uniform highp vec4 uQuestVrClipRow0;\n"
+				"uniform highp vec4 uQuestVrClipRow1;\n"
+				"uniform highp vec4 uQuestVrClipRow2;\n"
+				"uniform highp vec4 uQuestVrClipRow3;\n"
+				"void main()\n"
+				"{\n"
+				"  gl_Position = aRectPosition;\n"
+				"  if (uQuestVrTransformEnabled != 0 &&\n"
+				"      uQuestVrScreenSpaceTransformEnabled != 0) {\n"
+				"    highp vec4 questVrPosition = gl_Position;\n"
+				"    gl_Position = vec4(dot(uQuestVrClipRow0, questVrPosition),\n"
+				"      dot(uQuestVrClipRow1, questVrPosition),\n"
+				"      dot(uQuestVrClipRow2, questVrPosition),\n"
+				"      dot(uQuestVrClipRow3, questVrPosition));\n"
+				"  }\n"
+				"  vTexCoord0 = aTexCoord0;\n"
+				"  if (uQuestVrEnabled != 0 && uQuestVrSourceTexturePacked != 0)\n"
+				"    vTexCoord0.x = vTexCoord0.x * 0.5 + float(uQuestVrEye) * 0.5;\n"
+				"}\n";
 		}
 	};
 
@@ -745,6 +759,7 @@ namespace glsl {
 			m_program =
 				graphics::ObjectHandle(Utils::createRectShaderProgram(ssVertexShader.str().data(), ssFragmentShader.str().data()));
 
+			QuestVr::registerProgram(GLuint(m_program));
 			m_useProgram->useProgram(m_program);
 			GLint loc = glGetUniformLocation(GLuint(m_program), "uTex0");
 			assert(loc >= 0);
@@ -758,6 +773,7 @@ namespace glsl {
 		~TexrectDrawerShaderDraw()
 		{
 			m_useProgram->useProgram(graphics::ObjectHandle::null);
+			QuestVr::unregisterProgram(GLuint(m_program));
 			glDeleteProgram(GLuint(m_program));
 		}
 

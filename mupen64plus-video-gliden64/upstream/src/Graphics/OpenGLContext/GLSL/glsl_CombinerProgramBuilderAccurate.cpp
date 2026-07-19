@@ -127,6 +127,7 @@ public:
 			"uniform lowp vec4 uRectColor;						\n"
 			"uniform lowp int uQuestVrEnabled;\n"
 			"uniform lowp int uQuestVrEye;\n"
+			"uniform lowp ivec2 uQuestVrPackedTexture;\n"
 			"uniform lowp ivec2 uCacheFrameBuffer;\n"
 			"void main()										\n"
 			"{													\n"
@@ -134,7 +135,7 @@ public:
 			"  vShadeColor = uRectColor;						\n"
 			"  vShadeColorNoperspective = uRectColor;			\n"
 			"  vTexCoord = aTexCoord0;							\n"
-			"  if (uQuestVrEnabled != 0 && uCacheFrameBuffer.x != 0)\n"
+			"  if (uQuestVrEnabled != 0 && uQuestVrPackedTexture.x != 0)\n"
 			"    vTexCoord.x = vTexCoord.x * 0.5 + float(uQuestVrEye) * 0.5;\n"
 			"  vBaryCoords = vec4(aBaryCoords, vec2(1.0) - aBaryCoords);	\n"
 			;
@@ -159,7 +160,8 @@ class ShaderFragmentGlobalVariablesTex : public ShaderPart
 public:
 	ShaderFragmentGlobalVariablesTex(const opengl::GLInfo & _glinfo)
 	{
-		m_part =
+		m_part = "uniform lowp ivec2 uQuestVrPackedTexture;\n";
+		m_part +=
 			"uniform sampler2D uTex0;		\n"
 			"uniform sampler2D uTex1;		\n"
 			"uniform lowp vec4 uFogColor;	\n"
@@ -1206,7 +1208,7 @@ public:
 	{
 		m_part =
 			"textureEngine0(mTexCoord, tcData0); \n"
-			"if (uQuestVrEnabled != 0 && uCacheFrameBuffer.x != 0) { \n"
+			"if (uQuestVrEnabled != 0 && uQuestVrPackedTexture.x != 0) { \n"
 			"  highp float questVrEyeOffset = float(uQuestVrEye) * 0.5 * uQuestVrTextureSize.x; \n"
 			"  tcData0[0].x = tcData0[0].x * 0.5 + questVrEyeOffset; \n"
 			"  tcData0[1].x = tcData0[1].x * 0.5 + questVrEyeOffset; \n"
@@ -1223,7 +1225,7 @@ public:
 	{
 		m_part =
 			"textureEngine1(mTexCoord, tcData1); \n"
-			"if (uQuestVrEnabled != 0 && uCacheFrameBuffer.y != 0) { \n"
+			"if (uQuestVrEnabled != 0 && uQuestVrPackedTexture.y != 0) { \n"
 			"  highp float questVrEyeOffset = float(uQuestVrEye) * 0.5 * uQuestVrTextureSize.y; \n"
 			"  tcData1[0].x = tcData1[0].x * 0.5 + questVrEyeOffset; \n"
 			"  tcData1[1].x = tcData1[1].x * 0.5 + questVrEyeOffset; \n"

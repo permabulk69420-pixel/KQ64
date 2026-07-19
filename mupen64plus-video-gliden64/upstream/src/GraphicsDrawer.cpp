@@ -1854,6 +1854,8 @@ void GraphicsDrawer::copyTexturedRect(const CopyRectParams & _params)
 
 	Context::DrawRectParameters rectParams;
 	rectParams.mode = drawmode::TRIANGLE_STRIP;
+	rectParams.questVrSourceTexturePacked = _params.tex[0] != nullptr &&
+		QuestVr::isPackedFramebufferTexture(static_cast<u32>(_params.tex[0]->name));
 	rectParams.verticesCount = 4;
 	rectParams.vertices = m_rect;
 	rectParams.combiner = _params.combiner;

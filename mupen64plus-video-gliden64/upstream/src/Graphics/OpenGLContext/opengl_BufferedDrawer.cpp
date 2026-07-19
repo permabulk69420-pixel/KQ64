@@ -141,7 +141,8 @@ void BufferedDrawer::drawRects(const graphics::Context::DrawRectParameters & _pa
 	m_cachedAttribArray->enableVertexAttribArray(rectAttrib::texcoord0, _params.texrect);
 	m_cachedAttribArray->enableVertexAttribArray(rectAttrib::texcoord1, _params.texrect);
 
-	QuestVr::DrawScope stereoDraw(false);
+	QuestVr::DrawScope stereoDraw(false, _params.questVrScreenSpace,
+		_params.questVrSourceTexturePacked);
 	for (u32 eye = 0; eye < stereoDraw.eyeCount(); ++eye) {
 		stereoDraw.selectEye(eye);
 		glDrawArrays(GLenum(_params.mode), m_rectsBuffers.vbo.pos - _params.verticesCount, _params.verticesCount);

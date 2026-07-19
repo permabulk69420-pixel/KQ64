@@ -18,6 +18,7 @@ void resetProjectionTracking();
 unsigned int framebufferWidthMultiplier();
 float framebufferScale(float windowScaleX, float windowScaleY);
 void markPackedFramebufferTexture(unsigned int texture);
+bool isPackedFramebufferTexture(unsigned int texture);
 void noteFramebufferAllocation(unsigned int n64Width, unsigned int n64Height,
 	float scale, unsigned int physicalWidth, unsigned int physicalHeight,
 	unsigned int nativeResolutionFactor);
@@ -85,7 +86,8 @@ private:
 class DrawScope {
 public:
 	explicit DrawScope(bool transformGeometry,
-		bool correctScreenSpaceProjection = false);
+		bool correctScreenSpaceProjection = false,
+		bool sourceTexturePacked = false);
 	~DrawScope();
 
 	DrawScope(const DrawScope&) = delete;
@@ -98,6 +100,7 @@ private:
 	bool m_active;
 	bool m_transformGeometry;
 	bool m_correctScreenSpaceProjection;
+	bool m_sourceTexturePacked;
 	int m_targetWidth;
 	int m_coordinateWidth;
 };

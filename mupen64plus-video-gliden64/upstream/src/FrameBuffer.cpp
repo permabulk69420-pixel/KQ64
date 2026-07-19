@@ -1623,6 +1623,15 @@ void FrameBufferList::renderBuffer()
 	} else {
 		readBuffer = pFilteredBuffer->m_FBO;
 	}
+	// srcCoord is expressed in one-eye coordinates (0..1344 for a 2688-wide
+	// packed texture). Normalizing it by the physical packed width and then
+	// applying the eye selector in the copy shader divides X twice, so each eye
+	// samples only one quarter of the packed image. Keep the coordinate-space
+	// width independent from the texture allocation width.
+	u32 sourceCoordinateWidth = QuestVr::isPackedFramebufferTexture(
+		static_cast<u32>(pBufferTexture->name))
+		? std::max(1U, static_cast<u32>(pBufferTexture->width) / 2U)
+		: static_cast<u32>(pBufferTexture->width);
 
 	m_overscan.activate();
 	gfxContext.clearColorBuffer(0.0f, 0.0f, 0.0f, 0.0f);
@@ -1635,7 +1644,7 @@ void FrameBufferList::renderBuffer()
 	blitParams.srcY0 = srcCoord[1];
 	blitParams.srcX1 = srcCoord[2];
 	blitParams.srcY1 = srcCoord[3];
-	blitParams.srcWidth = pBufferTexture->width;
+	blitParams.srcWidth = sourceCoordinateWidth;
 	blitParams.srcHeight = pBufferTexture->height;
 	blitParams.dstX0 = dstCoord[0];
 	blitParams.dstY0 = dstCoord[1];
@@ -1645,7 +1654,8 @@ void FrameBufferList::renderBuffer()
 	blitParams.dstHeight = m_overscan.getBufferHeight();
 	blitParams.mask = blitMask::COLOR_BUFFER;
 	blitParams.tex[0] = pBufferTexture;
-	const bool downscale = blitParams.srcWidth >= blitParams.dstWidth || blitParams.srcHeight >= blitParams.dstHeight;
+	const bool downscale = blitParams.srcWidth > blitParams.dstWidth ||
+		blitParams.srcHeight > blitParams.dstHeight;
 	blitParams.filter = downscale || config.generalEmulation.enableHybridFilter > 0 ?
 		textureParameters::FILTER_LINEAR :
 		textureParameters::FILTER_NEAREST; //upscale; hybridFilter disabled
@@ -1661,6 +1671,11 @@ void FrameBufferList::renderBuffer()
 	}
 	blitParams.readBuffer = readBuffer;
 	blitParams.invertY = config.frameBufferEmulation.enableOverscan == 0;
+	QuestVr::noteFinalFramebufferBlit(u32(readBuffer), u32(pBufferTexture->name),
+		pBufferTexture->width, sourceCoordinateWidth, pBufferTexture->height,
+		m_overscan.getBufferWidth(), m_overscan.getBufferWidth(),
+		m_overscan.getBufferHeight(), blitParams.srcX0, blitParams.srcX1,
+		blitParams.dstX0, blitParams.dstX1, u32(blitParams.filter));
 
 	drawer.copyTexturedRect(blitParams);
 
@@ -1680,10 +1695,14 @@ void FrameBufferList::renderBuffer()
 			readBuffer = pFilteredBuffer->m_FBO;
 			pBufferTexture = pFilteredBuffer->m_pTexture;
 		}
+		sourceCoordinateWidth = QuestVr::isPackedFramebufferTexture(
+			static_cast<u32>(pBufferTexture->name))
+			? std::max(1U, static_cast<u32>(pBufferTexture->width) / 2U)
+			: static_cast<u32>(pBufferTexture->width);
 
 		blitParams.srcY0 = 0;
 		blitParams.srcY1 = min(static_cast<s32>(srcY1*srcScaleY), static_cast<s32>(pFilteredBuffer->m_pTexture->height));
-		blitParams.srcWidth = pBufferTexture->width;
+		blitParams.srcWidth = sourceCoordinateWidth;
 		blitParams.srcHeight = pBufferTexture->height;
 		blitParams.dstY0 = vOffset + static_cast<s32>(dstY0*dstScaleY);
 		blitParams.dstY1 = vOffset + static_cast<s32>(dstY1*dstScaleY);
@@ -1693,6 +1712,15 @@ void FrameBufferList::renderBuffer()
 		blitParams.tex[1] = pNextBuffer->m_pDepthTexture;
 		blitParams.mask = blitMask::COLOR_BUFFER;
 		blitParams.readBuffer = readBuffer;
+		const bool nextDownscale = blitParams.srcWidth > blitParams.dstWidth ||
+			blitParams.srcHeight > blitParams.dstHeight;
+		blitParams.filter = nextDownscale || config.generalEmulation.enableHybridFilter > 0
+			? textureParameters::FILTER_LINEAR : textureParameters::FILTER_NEAREST;
+		QuestVr::noteFinalFramebufferBlit(u32(readBuffer), u32(pBufferTexture->name),
+			pBufferTexture->width, sourceCoordinateWidth, pBufferTexture->height,
+			m_overscan.getBufferWidth(), m_overscan.getBufferWidth(),
+			m_overscan.getBufferHeight(), blitParams.srcX0, blitParams.srcX1,
+			blitParams.dstX0, blitParams.dstX1, u32(blitParams.filter));
 
 		drawer.copyTexturedRect(blitParams);
 	}
