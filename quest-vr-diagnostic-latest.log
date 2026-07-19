@@ -1,0 +1,5 @@
+2026-07-19T19:00:15.636+1000 I pid=11593 tid=12496 thread=Render thread [ShaderDrawer] SurfaceTexture consumer attach requested size=640x480 producer=640x480
+2026-07-19T19:00:15.637+1000 I pid=11593 tid=12496 thread=Render thread [ShaderDrawer] SurfaceTexture attached to external texture=1 glError=0x0
+2026-07-19T19:00:15.647+1000 I pid=11593 tid=12496 thread=Render thread [ShaderDrawer] SurfaceTexture consumer attach requested size=640x480 producer=640x480
+2026-07-19T19:01:08.854+1000 I pid=11593 tid=12496 thread=Render thread [ShaderDrawer] SurfaceTexture consumer destroy texture=1
+2026-07-19T19:01:28.233+1000 I pid=11593 tid=11593 thread=main [QuestVrPrefsActivity] Opened share sheet for diagnostic log bytes=590
