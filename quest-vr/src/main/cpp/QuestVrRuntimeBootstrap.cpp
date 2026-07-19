@@ -3,15 +3,17 @@
 #include <EGL/egl.h>
 #include <GLES3/gl3.h>
 
+#include "QuestVrDiagnostics.h"
+
 #include <cstring>
 
 namespace {
 
 constexpr const char* TAG = "M64P-QuestVR";
 
-#define LOGI(...) __android_log_print(ANDROID_LOG_INFO, TAG, __VA_ARGS__)
-#define LOGW(...) __android_log_print(ANDROID_LOG_WARN, TAG, __VA_ARGS__)
-#define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, TAG, __VA_ARGS__)
+#define LOGI(...) QuestVrDiagnostics::log(ANDROID_LOG_INFO, TAG, __VA_ARGS__)
+#define LOGW(...) QuestVrDiagnostics::log(ANDROID_LOG_WARN, TAG, __VA_ARGS__)
+#define LOGE(...) QuestVrDiagnostics::log(ANDROID_LOG_ERROR, TAG, __VA_ARGS__)
 
 EGLDisplay gParkingDisplay = EGL_NO_DISPLAY;
 EGLContext gParkingContext = EGL_NO_CONTEXT;
@@ -35,6 +37,23 @@ bool supportsSurfacelessContext(EGLDisplay display) {
             std::strstr(extensions, "EGL_KHR_surfaceless_context") != nullptr;
 }
 
+void logEglState(const char* label) {
+    const EGLDisplay display = eglGetCurrentDisplay();
+    const EGLContext context = eglGetCurrentContext();
+    const EGLSurface draw = eglGetCurrentSurface(EGL_DRAW);
+    const EGLSurface read = eglGetCurrentSurface(EGL_READ);
+    EGLint configId = 0;
+    EGLint clientVersion = 0;
+    if (display != EGL_NO_DISPLAY && context != EGL_NO_CONTEXT) {
+        eglQueryContext(display, context, EGL_CONFIG_ID, &configId);
+        eglQueryContext(display, context, EGL_CONTEXT_CLIENT_VERSION, &clientVersion);
+    }
+    LOGI("EGL bootstrap[%s] tid=%ld display=%p context=%p draw=%p read=%p "
+         "configId=%d clientVersion=%d eglError=0x%x",
+         label, QuestVrDiagnostics::currentThreadId(), display, context, draw, read,
+         configId, clientVersion, eglGetError());
+}
+
 }  // namespace
 
 /**
@@ -51,6 +70,9 @@ bool supportsSurfacelessContext(EGLDisplay display) {
 extern "C" JNIEXPORT jboolean JNICALL
 Java_paulscode_android_mupen64plusae_questvr_QuestVrBridge_nativePrimeAndroidSurface(
         JNIEnv*, jclass) {
+    LOGI("nativePrimeAndroidSurface entry tid=%ld",
+         QuestVrDiagnostics::currentThreadId());
+    logEglState("prime-entry");
     const EGLDisplay display = eglGetCurrentDisplay();
     const EGLContext context = eglGetCurrentContext();
     const EGLSurface surface = eglGetCurrentSurface(EGL_DRAW);
@@ -120,6 +142,9 @@ Java_paulscode_android_mupen64plusae_questvr_QuestVrBridge_nativePrimeAndroidSur
 extern "C" JNIEXPORT jboolean JNICALL
 Java_paulscode_android_mupen64plusae_questvr_QuestVrBridge_nativeParkEglContext(
         JNIEnv*, jclass) {
+    LOGI("nativeParkEglContext entry tid=%ld active=%d",
+         QuestVrDiagnostics::currentThreadId(), gParkingActive ? 1 : 0);
+    logEglState("park-entry");
     if (gParkingActive) {
         return JNI_TRUE;
     }
@@ -150,9 +175,23 @@ Java_paulscode_android_mupen64plusae_questvr_QuestVrBridge_nativeParkEglContext(
 
     EGLSurface parkingSurface = EGL_NO_SURFACE;
     EGLint surfaceType = 0;
+    EGLint renderableType = 0;
+    EGLint red = 0;
+    EGLint green = 0;
+    EGLint blue = 0;
+    EGLint alpha = 0;
+    eglGetConfigAttrib(display, config, EGL_RENDERABLE_TYPE, &renderableType);
+    eglGetConfigAttrib(display, config, EGL_RED_SIZE, &red);
+    eglGetConfigAttrib(display, config, EGL_GREEN_SIZE, &green);
+    eglGetConfigAttrib(display, config, EGL_BLUE_SIZE, &blue);
+    eglGetConfigAttrib(display, config, EGL_ALPHA_SIZE, &alpha);
     const bool supportsPbuffer =
             eglGetConfigAttrib(display, config, EGL_SURFACE_TYPE, &surfaceType) == EGL_TRUE &&
             (surfaceType & EGL_PBUFFER_BIT) != 0;
+    LOGI("Resolved EGLConfig id=%d handle=%p surfaceType=0x%x renderableType=0x%x "
+         "rgba=%d/%d/%d/%d pbuffer=%d surfacelessExtension=%d",
+         configId, config, surfaceType, renderableType, red, green, blue, alpha,
+         supportsPbuffer ? 1 : 0, supportsSurfacelessContext(display) ? 1 : 0);
     if (supportsPbuffer) {
         const EGLint pbufferAttributes[] = {
             EGL_WIDTH, 16,
@@ -170,6 +209,7 @@ Java_paulscode_android_mupen64plusae_questvr_QuestVrBridge_nativeParkEglContext(
             gParkingSurfaceless = false;
             LOGI("Moved OpenXR EGL context %p from Android window %p to pbuffer %p (config=%d)",
                  context, windowSurface, parkingSurface, configId);
+            logEglState("parked-pbuffer");
             return JNI_TRUE;
         }
 
@@ -198,6 +238,7 @@ Java_paulscode_android_mupen64plusae_questvr_QuestVrBridge_nativeParkEglContext(
         gParkingSurfaceless = true;
         LOGI("Detached OpenXR EGL context %p from Android window %p using surfaceless EGL (config=%d)",
              context, windowSurface, configId);
+        logEglState("parked-surfaceless");
         return JNI_TRUE;
     }
 
@@ -211,6 +252,10 @@ Java_paulscode_android_mupen64plusae_questvr_QuestVrBridge_nativeParkEglContext(
 extern "C" JNIEXPORT jboolean JNICALL
 Java_paulscode_android_mupen64plusae_questvr_QuestVrBridge_nativeReleaseParkedEglContext(
         JNIEnv*, jclass) {
+    LOGI("nativeReleaseParkedEglContext entry tid=%ld active=%d surfaceless=%d",
+         QuestVrDiagnostics::currentThreadId(), gParkingActive ? 1 : 0,
+         gParkingSurfaceless ? 1 : 0);
+    logEglState("release-entry");
     if (!gParkingActive) {
         return JNI_TRUE;
     }
@@ -253,5 +298,6 @@ Java_paulscode_android_mupen64plusae_questvr_QuestVrBridge_nativeReleaseParkedEg
     }
 
     clearParkingState();
+    logEglState("release-complete");
     return success ? JNI_TRUE : JNI_FALSE;
 }

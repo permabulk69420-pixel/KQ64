@@ -7,6 +7,8 @@
 #include <openxr/openxr.h>
 #include <openxr/openxr_platform.h>
 
+#include "QuestVrDiagnostics.h"
+
 #include <algorithm>
 #include <array>
 #include <chrono>
@@ -19,11 +21,31 @@
 namespace {
 
 constexpr const char* TAG = "M64P-QuestVR";
-constexpr uint32_t STARTUP_DIAGNOSTIC_LAYER_COUNT = 180;
+// Count only layers submitted while the runtime says the app is VISIBLE or FOCUSED. This keeps the
+// diagnostic phases from expiring behind Quest's loading environment.
+constexpr uint32_t STARTUP_QUAD_VISIBLE_LAYER_COUNT = 360;
+constexpr uint32_t STARTUP_PROJECTION_VISIBLE_LAYER_COUNT = 360;
+constexpr uint32_t STARTUP_DETAILED_FRAME_COUNT = 16;
+constexpr uint32_t PERIODIC_DETAILED_FRAME_INTERVAL = 300;
 
-#define LOGI(...) __android_log_print(ANDROID_LOG_INFO, TAG, __VA_ARGS__)
-#define LOGW(...) __android_log_print(ANDROID_LOG_WARN, TAG, __VA_ARGS__)
-#define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, TAG, __VA_ARGS__)
+#define LOGI(...) QuestVrDiagnostics::log(ANDROID_LOG_INFO, TAG, __VA_ARGS__)
+#define LOGW(...) QuestVrDiagnostics::log(ANDROID_LOG_WARN, TAG, __VA_ARGS__)
+#define LOGE(...) QuestVrDiagnostics::log(ANDROID_LOG_ERROR, TAG, __VA_ARGS__)
+
+enum class RenderContent {
+    SourceTexture,
+    StereoDiagnostic,
+    HeadLockedDiagnostic,
+};
+
+const char* renderContentName(RenderContent content) {
+    switch (content) {
+        case RenderContent::SourceTexture: return "SOURCE_TEXTURE";
+        case RenderContent::StereoDiagnostic: return "STEREO_DIAGNOSTIC";
+        case RenderContent::HeadLockedDiagnostic: return "HEAD_LOCKED_DIAGNOSTIC";
+        default: return "UNKNOWN";
+    }
+}
 
 struct Swapchain {
     XrSwapchain handle{XR_NULL_HANDLE};
@@ -93,6 +115,11 @@ struct State {
     std::vector<XrView> views;
     std::vector<Swapchain> swapchains;
     int64_t colorFormat{GL_RGBA8};
+    XrEnvironmentBlendMode environmentBlendMode{XR_ENVIRONMENT_BLEND_MODE_OPAQUE};
+
+    EGLDisplay graphicsDisplay{EGL_NO_DISPLAY};
+    EGLConfig graphicsConfig{nullptr};
+    EGLContext graphicsContext{EGL_NO_CONTEXT};
 
     GLuint framebuffer{0};
     GLuint program{0};
@@ -100,6 +127,7 @@ struct State {
     GLint sourceUniform{-1};
     GLint uvTransformUniform{-1};
     GLint quadScaleUniform{-1};
+    bool sourceBlitReady{false};
 
     GLuint sourceTexture{0};
     int sourceWidth{0};
@@ -150,6 +178,11 @@ struct State {
     uint32_t posePublicationCount{0};
     uint32_t submittedFrameCount{0};
     uint32_t submittedLayerCount{0};
+    uint32_t visibleLayerSubmissionCount{0};
+    uint32_t frameLoopCallCount{0};
+    uint32_t begunFrameCount{0};
+    uint32_t sourceFrameLatchCalls{0};
+    uint32_t newSourceFrameCount{0};
     uint32_t sessionWaitPollCount{0};
     uint32_t locateFallbackCount{0};
     uint32_t shouldRenderFalseCount{0};
@@ -174,9 +207,10 @@ const char* xrResultName(XrResult result) {
 
 bool xrOk(XrResult result, const char* operation) {
     if (XR_FAILED(result)) {
-        LOGE("%s failed: %s", operation, xrResultName(result));
+        LOGE("%s -> %d (%s)", operation, result, xrResultName(result));
         return false;
     }
+    LOGI("%s -> %d (%s)", operation, result, xrResultName(result));
     return true;
 }
 
@@ -193,6 +227,89 @@ const char* sessionStateName(XrSessionState state) {
         case XR_SESSION_STATE_EXITING: return "EXITING";
         default: return "INVALID";
     }
+}
+
+bool isSessionVisible() {
+    return g.sessionState == XR_SESSION_STATE_VISIBLE ||
+           g.sessionState == XR_SESSION_STATE_FOCUSED;
+}
+
+bool shouldLogDetailedFrame() {
+    return g.begunFrameCount <= STARTUP_DETAILED_FRAME_COUNT ||
+           (g.begunFrameCount != 0 &&
+            g.begunFrameCount % PERIODIC_DETAILED_FRAME_INTERVAL == 0);
+}
+
+bool xrFrameOk(XrResult result, const char* operation) {
+    if (XR_FAILED(result)) {
+        LOGE("frame=%u %s -> %d (%s)", g.begunFrameCount, operation, result,
+             xrResultName(result));
+        return false;
+    }
+    if (shouldLogDetailedFrame()) {
+        LOGI("frame=%u %s -> %d (%s)", g.begunFrameCount, operation, result,
+             xrResultName(result));
+    }
+    return true;
+}
+
+void logCurrentEglState(const char* label) {
+    const EGLDisplay display = eglGetCurrentDisplay();
+    const EGLContext context = eglGetCurrentContext();
+    const EGLSurface drawSurface = eglGetCurrentSurface(EGL_DRAW);
+    const EGLSurface readSurface = eglGetCurrentSurface(EGL_READ);
+    EGLint configId = 0;
+    EGLint clientVersion = 0;
+    EGLint surfaceType = 0;
+    EGLint renderableType = 0;
+    EGLint red = 0;
+    EGLint green = 0;
+    EGLint blue = 0;
+    EGLint alpha = 0;
+    EGLConfig config = nullptr;
+
+    if (display != EGL_NO_DISPLAY && context != EGL_NO_CONTEXT) {
+        eglQueryContext(display, context, EGL_CONFIG_ID, &configId);
+        eglQueryContext(display, context, EGL_CONTEXT_CLIENT_VERSION, &clientVersion);
+        const EGLint attributes[] = {EGL_CONFIG_ID, configId, EGL_NONE};
+        EGLint count = 0;
+        if (eglChooseConfig(display, attributes, &config, 1, &count) == EGL_TRUE && count == 1) {
+            eglGetConfigAttrib(display, config, EGL_SURFACE_TYPE, &surfaceType);
+            eglGetConfigAttrib(display, config, EGL_RENDERABLE_TYPE, &renderableType);
+            eglGetConfigAttrib(display, config, EGL_RED_SIZE, &red);
+            eglGetConfigAttrib(display, config, EGL_GREEN_SIZE, &green);
+            eglGetConfigAttrib(display, config, EGL_BLUE_SIZE, &blue);
+            eglGetConfigAttrib(display, config, EGL_ALPHA_SIZE, &alpha);
+        }
+    }
+
+    const char* glVersion = context == EGL_NO_CONTEXT
+            ? nullptr : reinterpret_cast<const char*>(glGetString(GL_VERSION));
+    const char* glRenderer = context == EGL_NO_CONTEXT
+            ? nullptr : reinterpret_cast<const char*>(glGetString(GL_RENDERER));
+    LOGI("EGL[%s] tid=%ld display=%p context=%p draw=%p read=%p config=%p id=%d "
+         "client=%d surfaceType=0x%x renderable=0x%x rgba=%d/%d/%d/%d "
+         "GL_VERSION=%s GL_RENDERER=%s",
+         label, QuestVrDiagnostics::currentThreadId(), display, context, drawSurface, readSurface,
+         config, configId, clientVersion, surfaceType, renderableType, red, green, blue, alpha,
+         glVersion == nullptr ? "(none)" : glVersion,
+         glRenderer == nullptr ? "(none)" : glRenderer);
+}
+
+bool validateFrameEglBinding() {
+    const EGLDisplay display = eglGetCurrentDisplay();
+    const EGLContext context = eglGetCurrentContext();
+    if (display != g.graphicsDisplay || context != g.graphicsContext ||
+            display == EGL_NO_DISPLAY || context == EGL_NO_CONTEXT) {
+        LOGE("OpenXR graphics binding changed: expected display=%p context=%p, current "
+             "display=%p context=%p", g.graphicsDisplay, g.graphicsContext, display, context);
+        logCurrentEglState("binding-mismatch");
+        return false;
+    }
+    if (shouldLogDetailedFrame()) {
+        logCurrentEglState("frame-current");
+    }
+    return true;
 }
 
 bool createAction(XrActionSet actionSet, XrActionType type, const char* name,
@@ -328,6 +445,18 @@ GLuint compileShader(GLenum type, const char* source) {
 }
 
 bool createGlResources() {
+    while (glGetError() != GL_NO_ERROR) {
+        // Start the diagnostic-resource check from a clean GL error state.
+    }
+    glGenFramebuffers(1, &g.framebuffer);
+    const GLenum framebufferObjectError = glGetError();
+    if (g.framebuffer == 0 || framebufferObjectError != GL_NO_ERROR) {
+        LOGE("Unable to create the OpenXR diagnostic framebuffer object: id=%u error=0x%x",
+             g.framebuffer, framebufferObjectError);
+        return false;
+    }
+    LOGI("Created OpenXR diagnostic framebuffer object %u", g.framebuffer);
+
     static constexpr const char* vertexSource = R"glsl(#version 300 es
 precision highp float;
 out vec2 vUv;
@@ -361,7 +490,9 @@ void main() {
     if (vertexShader == 0 || fragmentShader == 0) {
         if (vertexShader != 0) glDeleteShader(vertexShader);
         if (fragmentShader != 0) glDeleteShader(fragmentShader);
-        return false;
+        LOGW("External-OES source blit is unavailable; keeping diagnostic-only OpenXR presentation");
+        g.sourceBlitReady = false;
+        return true;
     }
 
     g.program = glCreateProgram();
@@ -378,15 +509,33 @@ void main() {
         GLsizei length = 0;
         glGetProgramInfoLog(g.program, static_cast<GLsizei>(log.size()), &length, log.data());
         LOGE("OpenXR blit program link failed: %.*s", length, log.data());
-        return false;
+        glDeleteProgram(g.program);
+        g.program = 0;
+        g.sourceBlitReady = false;
+        LOGW("OpenXR session will continue with diagnostic layers so shader failure remains visible");
+        return true;
     }
 
     g.sourceUniform = glGetUniformLocation(g.program, "uSource");
     g.uvTransformUniform = glGetUniformLocation(g.program, "uUvTransform");
     g.quadScaleUniform = glGetUniformLocation(g.program, "uQuadScale");
-    glGenFramebuffers(1, &g.framebuffer);
     glGenVertexArrays(1, &g.vertexArray);
-    return glGetError() == GL_NO_ERROR;
+    const GLenum resourceError = glGetError();
+    if (g.sourceUniform < 0 || g.uvTransformUniform < 0 || g.quadScaleUniform < 0 ||
+            g.vertexArray == 0 || resourceError != GL_NO_ERROR) {
+        LOGE("External-OES blit resources invalid: source=%d uv=%d scale=%d vao=%u error=0x%x",
+             g.sourceUniform, g.uvTransformUniform, g.quadScaleUniform, g.vertexArray,
+             resourceError);
+        if (g.vertexArray != 0) glDeleteVertexArrays(1, &g.vertexArray);
+        if (g.program != 0) glDeleteProgram(g.program);
+        g.vertexArray = 0;
+        g.program = 0;
+        g.sourceBlitReady = false;
+        return true;
+    }
+    g.sourceBlitReady = true;
+    LOGI("External-OES source blit initialized: program=%u vao=%u", g.program, g.vertexArray);
+    return true;
 }
 
 void resolveRendererBridge() {
@@ -662,6 +811,65 @@ void publishHeadPose(XrTime displayTime, uint32_t viewCount) {
     }
 }
 
+bool validateRequiredInstanceExtensions() {
+    uint32_t count = 0;
+    if (!xrOk(xrEnumerateInstanceExtensionProperties(nullptr, 0, &count, nullptr),
+              "xrEnumerateInstanceExtensionProperties(count)")) {
+        return false;
+    }
+    std::vector<XrExtensionProperties> properties(count);
+    for (XrExtensionProperties& property : properties) {
+        property.type = XR_TYPE_EXTENSION_PROPERTIES;
+        property.next = nullptr;
+    }
+    if (!xrOk(xrEnumerateInstanceExtensionProperties(nullptr, count, &count, properties.data()),
+              "xrEnumerateInstanceExtensionProperties")) {
+        return false;
+    }
+
+    const std::array<const char*, 2> required{
+        XR_KHR_ANDROID_CREATE_INSTANCE_EXTENSION_NAME,
+        XR_KHR_OPENGL_ES_ENABLE_EXTENSION_NAME,
+    };
+    bool allFound = true;
+    for (const char* requiredName : required) {
+        const auto match = std::find_if(properties.begin(), properties.end(),
+                [requiredName](const XrExtensionProperties& property) {
+                    return std::strcmp(property.extensionName, requiredName) == 0;
+                });
+        if (match == properties.end()) {
+            LOGE("Required OpenXR extension is unavailable: %s", requiredName);
+            allFound = false;
+        } else {
+            LOGI("Required OpenXR extension available: %s version=%u", requiredName,
+                 match->extensionVersion);
+        }
+    }
+    return allFound;
+}
+
+bool selectEnvironmentBlendMode() {
+    uint32_t count = 0;
+    if (!xrOk(xrEnumerateEnvironmentBlendModes(g.instance, g.systemId,
+            XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO, 0, &count, nullptr),
+            "xrEnumerateEnvironmentBlendModes(count)") || count == 0) {
+        return false;
+    }
+    std::vector<XrEnvironmentBlendMode> modes(count);
+    if (!xrOk(xrEnumerateEnvironmentBlendModes(g.instance, g.systemId,
+            XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO, count, &count, modes.data()),
+            "xrEnumerateEnvironmentBlendModes")) {
+        return false;
+    }
+    if (std::find(modes.begin(), modes.end(), XR_ENVIRONMENT_BLEND_MODE_OPAQUE) == modes.end()) {
+        LOGE("Primary stereo configuration does not support XR_ENVIRONMENT_BLEND_MODE_OPAQUE");
+        return false;
+    }
+    g.environmentBlendMode = XR_ENVIRONMENT_BLEND_MODE_OPAQUE;
+    LOGI("Selected OpenXR environment blend mode OPAQUE from %u advertised modes", count);
+    return true;
+}
+
 bool selectColorFormat() {
     uint32_t count = 0;
     if (!xrOk(xrEnumerateSwapchainFormats(g.session, 0, &count, nullptr), "xrEnumerateSwapchainFormats(count)") || count == 0) {
@@ -671,12 +879,20 @@ bool selectColorFormat() {
     if (!xrOk(xrEnumerateSwapchainFormats(g.session, count, &count, formats.data()), "xrEnumerateSwapchainFormats")) {
         return false;
     }
+    std::string offered;
+    for (const int64_t format : formats) {
+        if (!offered.empty()) offered += ",";
+        offered += std::to_string(format);
+    }
+    LOGI("OpenXR GLES swapchain formats (%u): %s", count, offered.c_str());
     // GL_RGBA8 is the most conservative compositor format for the first Quest bring-up. Keep
     // sRGB available, but do not make correct sRGB sampling a prerequisite for a visible frame.
     constexpr std::array<int64_t, 3> preferred{GL_RGBA8, GL_SRGB8_ALPHA8, GL_RGB10_A2};
     for (const int64_t candidate : preferred) {
         if (std::find(formats.begin(), formats.end(), candidate) != formats.end()) {
             g.colorFormat = candidate;
+            LOGI("Selected OpenXR GLES swapchain format %lld",
+                 static_cast<long long>(candidate));
             return true;
         }
     }
@@ -708,6 +924,10 @@ bool createSwapchains() {
     g.swapchains.resize(viewCount);
     for (uint32_t eye = 0; eye < viewCount; ++eye) {
         const XrViewConfigurationView& view = g.configViews[eye];
+        LOGI("View %u recommended=%ux%u max=%ux%u samples=%u maxSamples=%u", eye,
+             view.recommendedImageRectWidth, view.recommendedImageRectHeight,
+             view.maxImageRectWidth, view.maxImageRectHeight,
+             view.recommendedSwapchainSampleCount, view.maxSwapchainSampleCount);
         XrSwapchainCreateInfo info{XR_TYPE_SWAPCHAIN_CREATE_INFO};
         info.usageFlags = XR_SWAPCHAIN_USAGE_SAMPLED_BIT | XR_SWAPCHAIN_USAGE_COLOR_ATTACHMENT_BIT;
         info.format = g.colorFormat;
@@ -736,7 +956,9 @@ bool createSwapchains() {
                 "xrEnumerateSwapchainImages")) {
             return false;
         }
-        LOGI("Created eye %u swapchain: %dx%d, %u images", eye, swapchain.width, swapchain.height, imageCount);
+        LOGI("Created eye %u swapchain handle=%p size=%dx%d images=%u format=%lld", eye,
+             reinterpret_cast<void*>(swapchain.handle), swapchain.width, swapchain.height,
+             imageCount, static_cast<long long>(g.colorFormat));
     }
     return true;
 }
@@ -753,30 +975,47 @@ void pollEvents() {
             break;
         }
         if (XR_FAILED(pollResult)) {
-            LOGE("xrPollEvent failed: %s", xrResultName(pollResult));
+            LOGE("xrPollEvent -> %d (%s)", pollResult, xrResultName(pollResult));
             g.exitRequested = true;
             break;
         }
         const auto* header = reinterpret_cast<const XrEventDataBaseHeader*>(&event);
+        LOGI("xrPollEvent -> %d (%s), eventType=%d", pollResult, xrResultName(pollResult),
+             static_cast<int>(header->type));
         if (header->type == XR_TYPE_EVENT_DATA_SESSION_STATE_CHANGED) {
             const auto* changed = reinterpret_cast<const XrEventDataSessionStateChanged*>(header);
             g.sessionState = changed->state;
-            LOGI("OpenXR session state changed to %s (%d)", sessionStateName(g.sessionState),
-                 static_cast<int>(g.sessionState));
+            LOGI("OpenXR session state changed: session=%p time=%lld state=%s (%d) running=%d",
+                 reinterpret_cast<void*>(changed->session), static_cast<long long>(changed->time),
+                 sessionStateName(g.sessionState), static_cast<int>(g.sessionState),
+                 g.sessionRunning ? 1 : 0);
             switch (g.sessionState) {
                 case XR_SESSION_STATE_READY: {
-                    XrSessionBeginInfo begin{XR_TYPE_SESSION_BEGIN_INFO};
-                    begin.primaryViewConfigurationType = XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO;
-                    if (xrOk(xrBeginSession(g.session, &begin), "xrBeginSession")) {
-                        g.sessionRunning = true;
-                        g.sessionWaitPollCount = 0;
-                        LOGI("OpenXR session began; waiting for compositor visibility");
+                    if (!g.sessionRunning) {
+                        XrSessionBeginInfo begin{XR_TYPE_SESSION_BEGIN_INFO};
+                        begin.primaryViewConfigurationType =
+                                XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO;
+                        if (xrOk(xrBeginSession(g.session, &begin), "xrBeginSession")) {
+                            g.sessionRunning = true;
+                            g.sessionWaitPollCount = 0;
+                            LOGI("OpenXR session began; waiting for compositor visibility");
+                        } else {
+                            g.exitRequested = true;
+                        }
+                    } else {
+                        LOGW("Ignoring duplicate READY event for an already-running session");
                     }
                     break;
                 }
                 case XR_SESSION_STATE_STOPPING:
-                    g.sessionRunning = false;
-                    xrOk(xrEndSession(g.session), "xrEndSession");
+                    if (g.sessionRunning) {
+                        if (!xrOk(xrEndSession(g.session), "xrEndSession")) {
+                            g.exitRequested = true;
+                        }
+                        g.sessionRunning = false;
+                    } else {
+                        LOGW("STOPPING received while sessionRunning=false; not calling xrEndSession");
+                    }
                     break;
                 case XR_SESSION_STATE_EXITING:
                 case XR_SESSION_STATE_LOSS_PENDING:
@@ -787,9 +1026,17 @@ void pollEvents() {
                     break;
             }
         } else if (header->type == XR_TYPE_EVENT_DATA_INSTANCE_LOSS_PENDING) {
+            const auto* loss = reinterpret_cast<const XrEventDataInstanceLossPending*>(header);
+            LOGE("OpenXR instance loss pending at time=%lld",
+                 static_cast<long long>(loss->lossTime));
             g.sessionRunning = false;
             g.exitRequested = true;
         } else if (header->type == XR_TYPE_EVENT_DATA_REFERENCE_SPACE_CHANGE_PENDING) {
+            const auto* change =
+                    reinterpret_cast<const XrEventDataReferenceSpaceChangePending*>(header);
+            LOGI("OpenXR reference-space change pending: type=%d time=%lld poseValid=%d",
+                 static_cast<int>(change->referenceSpaceType),
+                 static_cast<long long>(change->changeTime), change->poseValid ? 1 : 0);
             resolveRendererBridge();
             if (g.recenterVr != nullptr) {
                 g.recenterVr();
@@ -800,7 +1047,7 @@ void pollEvents() {
     }
 }
 
-bool renderEye(uint32_t eye, uint32_t imageIndex, bool diagnosticColor) {
+bool renderEye(uint32_t eye, uint32_t imageIndex, RenderContent content) {
     const Swapchain& swapchain = g.swapchains[eye];
     while (glGetError() != GL_NO_ERROR) {
         // Discard stale errors so diagnostics describe this eye submission.
@@ -819,16 +1066,19 @@ bool renderEye(uint32_t eye, uint32_t imageIndex, bool diagnosticColor) {
     glDisable(GL_CULL_FACE);
     glDisable(GL_BLEND);
     glDisable(GL_SCISSOR_TEST);
-    if (diagnosticColor) {
-        // Deliberately unmistakable during compositor bring-up: red left, blue right. This clear
-        // happens after image acquisition and no longer depends on a valid tracked view pose.
+    if (content == RenderContent::HeadLockedDiagnostic) {
+        // A bright green head-locked panel is the first proof that any core composition layer is
+        // reaching the compositor. It does not depend on tracking or the external texture shader.
+        glClearColor(0.02f, 0.95f, 0.12f, 1.0f);
+    } else if (content == RenderContent::StereoDiagnostic) {
+        // Deliberately unmistakable projection proof: red left, blue right.
         glClearColor(eye == 0 ? 0.90f : 0.02f, 0.02f, eye == 0 ? 0.02f : 0.90f, 1.0f);
     } else {
         glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
     }
     glClear(GL_COLOR_BUFFER_BIT);
 
-    if (!diagnosticColor && g.sourceTexture != 0) {
+    if (content == RenderContent::SourceTexture && g.sourceBlitReady && g.sourceTexture != 0) {
         glUseProgram(g.program);
         glBindVertexArray(g.vertexArray);
         glActiveTexture(GL_TEXTURE0);
@@ -858,7 +1108,7 @@ bool renderEye(uint32_t eye, uint32_t imageIndex, bool diagnosticColor) {
 
     const GLenum error = glGetError();
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
-    if (diagnosticColor) {
+    if (content != RenderContent::SourceTexture) {
         // Remove driver/compositor ambiguity from the short diagnostic interval. Normal frames
         // use glFlush so this synchronization cost does not persist during emulation.
         glFinish();
@@ -872,7 +1122,53 @@ bool renderEye(uint32_t eye, uint32_t imageIndex, bool diagnosticColor) {
     return true;
 }
 
+bool acquireRenderRelease(uint32_t eye, RenderContent content) {
+    Swapchain& swapchain = g.swapchains[eye];
+    XrSwapchainImageAcquireInfo acquireInfo{XR_TYPE_SWAPCHAIN_IMAGE_ACQUIRE_INFO};
+    uint32_t imageIndex = 0;
+    const XrResult acquireResult =
+            xrAcquireSwapchainImage(swapchain.handle, &acquireInfo, &imageIndex);
+    if (!xrFrameOk(acquireResult, "xrAcquireSwapchainImage")) {
+        return false;
+    }
+    if (imageIndex >= swapchain.images.size()) {
+        LOGE("frame=%u eye=%u acquired invalid image index=%u imageCount=%zu swapchain=%p",
+             g.begunFrameCount, eye, imageIndex, swapchain.images.size(),
+             reinterpret_cast<void*>(swapchain.handle));
+        g.exitRequested = true;
+        return false;
+    }
+    if (shouldLogDetailedFrame()) {
+        LOGI("frame=%u eye=%u acquired swapchain=%p imageIndex=%u texture=%u size=%dx%d",
+             g.begunFrameCount, eye, reinterpret_cast<void*>(swapchain.handle), imageIndex,
+             swapchain.images[imageIndex].image, swapchain.width, swapchain.height);
+    }
+
+    XrSwapchainImageWaitInfo imageWait{XR_TYPE_SWAPCHAIN_IMAGE_WAIT_INFO};
+    imageWait.timeout = XR_INFINITE_DURATION;
+    const XrResult waitResult = xrWaitSwapchainImage(swapchain.handle, &imageWait);
+    if (!xrFrameOk(waitResult, "xrWaitSwapchainImage")) {
+        // An acquired image may only be released after a successful wait. Force orderly teardown
+        // rather than violating the swapchain call order on the next frame.
+        g.exitRequested = true;
+        return false;
+    }
+
+    const bool rendered = renderEye(eye, imageIndex, content);
+    XrSwapchainImageReleaseInfo releaseInfo{XR_TYPE_SWAPCHAIN_IMAGE_RELEASE_INFO};
+    const XrResult releaseResult = xrReleaseSwapchainImage(swapchain.handle, &releaseInfo);
+    const bool released = xrFrameOk(releaseResult, "xrReleaseSwapchainImage");
+    if (!rendered || !released) {
+        g.exitRequested = true;
+    }
+    return rendered && released;
+}
+
 void destroyState(JNIEnv* env) {
+    LOGI("Destroying OpenXR state on tid=%ld initialized=%d session=%p state=%s running=%d",
+         QuestVrDiagnostics::currentThreadId(), g.initialized ? 1 : 0,
+         reinterpret_cast<void*>(g.session), sessionStateName(g.sessionState),
+         g.sessionRunning ? 1 : 0);
     if (g.setVrEnabled != nullptr) {
         g.setVrEnabled(0);
     }
@@ -907,17 +1203,28 @@ void destroyState(JNIEnv* env) {
         g.sessionRunning = false;
     }
     if (g.controllerActions.actionSet != XR_NULL_HANDLE) {
-        xrDestroyActionSet(g.controllerActions.actionSet);
+        xrOk(xrDestroyActionSet(g.controllerActions.actionSet), "xrDestroyActionSet");
         g.controllerActions = {};
     }
     for (Swapchain& swapchain : g.swapchains) {
-        if (swapchain.handle != XR_NULL_HANDLE) xrDestroySwapchain(swapchain.handle);
+        if (swapchain.handle != XR_NULL_HANDLE) {
+            xrOk(xrDestroySwapchain(swapchain.handle), "xrDestroySwapchain");
+        }
     }
     g.swapchains.clear();
-    if (g.viewSpace != XR_NULL_HANDLE) xrDestroySpace(g.viewSpace);
-    if (g.localSpace != XR_NULL_HANDLE) xrDestroySpace(g.localSpace);
-    if (g.session != XR_NULL_HANDLE) xrDestroySession(g.session);
-    if (g.instance != XR_NULL_HANDLE) xrDestroyInstance(g.instance);
+    if (g.viewSpace != XR_NULL_HANDLE) {
+        xrOk(xrDestroySpace(g.viewSpace), "xrDestroySpace(VIEW)");
+    }
+    if (g.localSpace != XR_NULL_HANDLE) {
+        xrOk(xrDestroySpace(g.localSpace), "xrDestroySpace(LOCAL)");
+    }
+    if (g.session != XR_NULL_HANDLE) {
+        xrOk(xrDestroySession(g.session), "xrDestroySession");
+    }
+    if (g.instance != XR_NULL_HANDLE) {
+        const XrResult result = xrDestroyInstance(g.instance);
+        LOGI("xrDestroyInstance -> %d", result);
+    }
     g.localSpace = XR_NULL_HANDLE;
     g.viewSpace = XR_NULL_HANDLE;
     g.session = XR_NULL_HANDLE;
@@ -936,12 +1243,25 @@ bool initializeOpenXr(JNIEnv* env, jobject activity) {
         return true;
     }
 
-    env->GetJavaVM(&g.vm);
+    const jint vmResult = env->GetJavaVM(&g.vm);
+    if (vmResult != JNI_OK || g.vm == nullptr) {
+        LOGE("GetJavaVM failed: result=%d vm=%p", vmResult, g.vm);
+        return false;
+    }
     g.activity = env->NewGlobalRef(activity);
+    if (g.activity == nullptr) {
+        LOGE("NewGlobalRef(Activity) failed");
+        return false;
+    }
+    LOGI("OpenXR initialization entry tid=%ld JavaVM=%p Activity(global)=%p",
+         QuestVrDiagnostics::currentThreadId(), g.vm, g.activity);
+    logCurrentEglState("nativeInitialize-entry");
 
     PFN_xrInitializeLoaderKHR initializeLoader = nullptr;
     XrResult result = xrGetInstanceProcAddr(XR_NULL_HANDLE, "xrInitializeLoaderKHR",
                                             reinterpret_cast<PFN_xrVoidFunction*>(&initializeLoader));
+    LOGI("xrGetInstanceProcAddr(xrInitializeLoaderKHR) -> %d function=%p", result,
+         reinterpret_cast<void*>(initializeLoader));
     if (XR_SUCCEEDED(result) && initializeLoader != nullptr) {
         XrLoaderInitInfoAndroidKHR loaderInfo{XR_TYPE_LOADER_INIT_INFO_ANDROID_KHR};
         loaderInfo.applicationVM = g.vm;
@@ -950,6 +1270,12 @@ bool initializeOpenXr(JNIEnv* env, jobject activity) {
                 "xrInitializeLoaderKHR")) {
             return false;
         }
+    } else {
+        LOGW("xrInitializeLoaderKHR is unavailable; continuing for loader compatibility as PPSSPP does");
+    }
+
+    if (!validateRequiredInstanceExtensions()) {
+        return false;
     }
 
     const std::array<const char*, 2> extensions{
@@ -987,6 +1313,22 @@ bool initializeOpenXr(JNIEnv* env, jobject activity) {
     if (!xrOk(xrGetSystem(g.instance, &systemInfo, &g.systemId), "xrGetSystem")) {
         return false;
     }
+    XrSystemProperties systemProperties{XR_TYPE_SYSTEM_PROPERTIES};
+    if (!xrOk(xrGetSystemProperties(g.instance, g.systemId, &systemProperties),
+              "xrGetSystemProperties")) {
+        return false;
+    }
+    LOGI("OpenXR system id=%llu name=%s vendor=%u maxLayerCount=%u maxSwapchain=%ux%u "
+         "trackingOrientation=%d trackingPosition=%d",
+         static_cast<unsigned long long>(g.systemId), systemProperties.systemName,
+         systemProperties.vendorId, systemProperties.graphicsProperties.maxLayerCount,
+         systemProperties.graphicsProperties.maxSwapchainImageWidth,
+         systemProperties.graphicsProperties.maxSwapchainImageHeight,
+         systemProperties.trackingProperties.orientationTracking ? 1 : 0,
+         systemProperties.trackingProperties.positionTracking ? 1 : 0);
+    if (!selectEnvironmentBlendMode()) {
+        return false;
+    }
 
     PFN_xrGetOpenGLESGraphicsRequirementsKHR getRequirements = nullptr;
     if (!xrOk(xrGetInstanceProcAddr(g.instance, "xrGetOpenGLESGraphicsRequirementsKHR",
@@ -998,6 +1340,13 @@ bool initializeOpenXr(JNIEnv* env, jobject activity) {
     if (!xrOk(getRequirements(g.instance, g.systemId, &requirements), "xrGetOpenGLESGraphicsRequirementsKHR")) {
         return false;
     }
+    LOGI("OpenXR GLES requirements min=%u.%u.%u max=%u.%u.%u",
+         XR_VERSION_MAJOR(requirements.minApiVersionSupported),
+         XR_VERSION_MINOR(requirements.minApiVersionSupported),
+         XR_VERSION_PATCH(requirements.minApiVersionSupported),
+         XR_VERSION_MAJOR(requirements.maxApiVersionSupported),
+         XR_VERSION_MINOR(requirements.maxApiVersionSupported),
+         XR_VERSION_PATCH(requirements.maxApiVersionSupported));
 
     GLint major = 0;
     GLint minor = 0;
@@ -1030,6 +1379,13 @@ bool initializeOpenXr(JNIEnv* env, jobject activity) {
         LOGE("Unable to resolve current EGLConfig %d: 0x%x", configId, eglGetError());
         return false;
     }
+    g.graphicsDisplay = graphicsBinding.display;
+    g.graphicsConfig = graphicsBinding.config;
+    g.graphicsContext = graphicsBinding.context;
+    logCurrentEglState("pre-xrCreateSession");
+    LOGI("OpenXR GLES binding display=%p config=%p configId=%d context=%p currentThread=%ld",
+         g.graphicsDisplay, g.graphicsConfig, configId, g.graphicsContext,
+         QuestVrDiagnostics::currentThreadId());
 
     XrSessionCreateInfo sessionInfo{XR_TYPE_SESSION_CREATE_INFO};
     sessionInfo.next = &graphicsBinding;
@@ -1059,7 +1415,8 @@ bool initializeOpenXr(JNIEnv* env, jobject activity) {
     }
 
     g.initialized = true;
-    LOGI("OpenXR presentation bridge initialized on GLES %d.%d", major, minor);
+    LOGI("OpenXR presentation bridge initialized on GLES %d.%d; first proof is a green "
+         "head-locked quad independent of SurfaceTexture and tracking", major, minor);
     return true;
 }
 
@@ -1086,6 +1443,11 @@ Java_paulscode_android_mupen64plusae_questvr_QuestVrBridge_nativeSetSourceTextur
     resolveRendererBridge();
     g.stereoSourceActive = g.setVrEnabled != nullptr && g.stereoRequested &&
                            g.configurationStereoEnabled;
+    LOGI("Source texture update tid=%ld texture=%d size=%dx%d requestStereo=%d "
+         "stereoActive=%d blitReady=%d currentContext=%p",
+         QuestVrDiagnostics::currentThreadId(), texture, width, height,
+         requestStereo == JNI_TRUE ? 1 : 0, g.stereoSourceActive ? 1 : 0,
+         g.sourceBlitReady ? 1 : 0, eglGetCurrentContext());
     if (texture == 0) {
         g.sourceViewsValid = false;
         g.sourceViewDisplayTime = 0;
@@ -1096,8 +1458,20 @@ Java_paulscode_android_mupen64plusae_questvr_QuestVrBridge_nativeSetSourceTextur
 extern "C" JNIEXPORT void JNICALL
 Java_paulscode_android_mupen64plusae_questvr_QuestVrBridge_nativeOnSourceFrameLatched(
         JNIEnv*, jclass, jlong textureTimestamp) {
+    ++g.sourceFrameLatchCalls;
+    const int64_t previousTimestamp = g.sourceTextureTimestamp;
     resolveRendererBridge();
     associateLatchedSourceFrame(static_cast<int64_t>(textureTimestamp));
+    if (textureTimestamp > 0 && textureTimestamp != previousTimestamp) {
+        ++g.newSourceFrameCount;
+    }
+    if (g.sourceFrameLatchCalls <= 10 || g.sourceFrameLatchCalls % 300 == 0) {
+        LOGI("SurfaceTexture latch call=%u timestamp=%lld previous=%lld newFrames=%u "
+             "sourceTexture=%u poseMatched=%d tid=%ld",
+             g.sourceFrameLatchCalls, static_cast<long long>(textureTimestamp),
+             static_cast<long long>(previousTimestamp), g.newSourceFrameCount, g.sourceTexture,
+             g.sourceViewsValid ? 1 : 0, QuestVrDiagnostics::currentThreadId());
+    }
 }
 
 extern "C" JNIEXPORT void JNICALL
@@ -1124,6 +1498,13 @@ Java_paulscode_android_mupen64plusae_questvr_QuestVrBridge_nativeConfigure(
     g.configurationMarioKartCameraOffsetZ = marioKartCameraOffsetZ;
     g.touchControllerEnabled = touchControllerEnabled == JNI_TRUE;
     g.debugLogging = debugLogging == JNI_TRUE;
+    LOGI("Quest VR configuration stereo=%d swapEyes=%d ipd=%.4f worldUnits=%.2f "
+         "rotation=%.2f position=%d maxTranslation=%.3f sourceBlitReady=%d debug=%d",
+         g.configurationStereoEnabled ? 1 : 0, g.configurationSwapEyes ? 1 : 0,
+         g.configurationIpdMeters, g.configurationWorldUnitsPerMeter,
+         g.configurationRotationStrength, g.configurationPositionEnabled ? 1 : 0,
+         g.configurationMaxTranslationMeters, g.sourceBlitReady ? 1 : 0,
+         g.debugLogging ? 1 : 0);
     if (g.configureVr != nullptr) {
         g.configureVr(g.configurationStereoEnabled ? 1 : 0, g.configurationIpdMeters,
                       g.configurationWorldUnitsPerMeter, g.configurationRotationStrength,
@@ -1148,6 +1529,7 @@ Java_paulscode_android_mupen64plusae_questvr_QuestVrBridge_nativeRecenter(
 extern "C" JNIEXPORT jboolean JNICALL
 Java_paulscode_android_mupen64plusae_questvr_QuestVrBridge_nativeRenderFrame(
         JNIEnv*, jclass) {
+    ++g.frameLoopCallCount;
     if (!g.initialized || g.exitRequested) {
         return JNI_FALSE;
     }
@@ -1163,6 +1545,12 @@ Java_paulscode_android_mupen64plusae_questvr_QuestVrBridge_nativeRenderFrame(
         return JNI_FALSE;
     }
 
+    ++g.begunFrameCount;
+    if (!validateFrameEglBinding()) {
+        g.exitRequested = true;
+        return JNI_FALSE;
+    }
+
     syncControllerInput();
 
     using Clock = std::chrono::steady_clock;
@@ -1170,19 +1558,30 @@ Java_paulscode_android_mupen64plusae_questvr_QuestVrBridge_nativeRenderFrame(
     const Clock::time_point waitFrameStart = Clock::now();
     XrFrameWaitInfo waitInfo{XR_TYPE_FRAME_WAIT_INFO};
     XrFrameState frameState{XR_TYPE_FRAME_STATE};
-    if (!xrOk(xrWaitFrame(g.session, &waitInfo, &frameState), "xrWaitFrame")) {
+    if (!xrFrameOk(xrWaitFrame(g.session, &waitInfo, &frameState), "xrWaitFrame")) {
+        g.exitRequested = true;
         return JNI_FALSE;
     }
     const Clock::time_point waitFrameEnd = Clock::now();
+    if (shouldLogDetailedFrame()) {
+        LOGI("frame=%u wait complete predictedDisplayTime=%lld predictedPeriod=%lld "
+             "shouldRender=%d sessionState=%s",
+             g.begunFrameCount, static_cast<long long>(frameState.predictedDisplayTime),
+             static_cast<long long>(frameState.predictedDisplayPeriod),
+             frameState.shouldRender == XR_TRUE ? 1 : 0, sessionStateName(g.sessionState));
+    }
     XrFrameBeginInfo beginInfo{XR_TYPE_FRAME_BEGIN_INFO};
-    if (!xrOk(xrBeginFrame(g.session, &beginInfo), "xrBeginFrame")) {
+    if (!xrFrameOk(xrBeginFrame(g.session, &beginInfo), "xrBeginFrame")) {
+        g.exitRequested = true;
         return JNI_FALSE;
     }
 
     std::vector<XrCompositionLayerProjectionView> layerViews;
-    XrCompositionLayerProjection layer{XR_TYPE_COMPOSITION_LAYER_PROJECTION};
+    XrCompositionLayerProjection projectionLayer{XR_TYPE_COMPOSITION_LAYER_PROJECTION};
+    XrCompositionLayerQuad diagnosticQuad{XR_TYPE_COMPOSITION_LAYER_QUAD};
     std::array<const XrCompositionLayerBaseHeader*, 1> layers{};
     uint32_t layerCount = 0;
+    RenderContent content = RenderContent::HeadLockedDiagnostic;
 
     if (frameState.shouldRender == XR_TRUE) {
         XrViewLocateInfo locateInfo{XR_TYPE_VIEW_LOCATE_INFO};
@@ -1192,12 +1591,26 @@ Java_paulscode_android_mupen64plusae_questvr_QuestVrBridge_nativeRenderFrame(
         XrViewState viewState{XR_TYPE_VIEW_STATE};
         uint32_t viewCount = 0;
         const XrResult locateResult = xrLocateViews(g.session, &locateInfo, &viewState,
-                                                    static_cast<uint32_t>(g.views.size()), &viewCount, g.views.data());
+                static_cast<uint32_t>(g.views.size()), &viewCount, g.views.data());
+        xrFrameOk(locateResult, "xrLocateViews");
         const bool validPose = XR_SUCCEEDED(locateResult) && viewCount == g.views.size() &&
             (viewState.viewStateFlags & XR_VIEW_STATE_ORIENTATION_VALID_BIT) != 0 &&
             (viewState.viewStateFlags & XR_VIEW_STATE_POSITION_VALID_BIT) != 0;
         if (validPose) {
             publishHeadPose(frameState.predictedDisplayTime, viewCount);
+            if (shouldLogDetailedFrame()) {
+                for (uint32_t eye = 0; eye < viewCount; ++eye) {
+                    const XrView& view = g.views[eye];
+                    LOGI("frame=%u located eye=%u pose=[q %.4f %.4f %.4f %.4f, p %.4f %.4f %.4f] "
+                         "fov=[L %.4f R %.4f U %.4f D %.4f] flags=0x%llx",
+                         g.begunFrameCount, eye, view.pose.orientation.x,
+                         view.pose.orientation.y, view.pose.orientation.z,
+                         view.pose.orientation.w, view.pose.position.x, view.pose.position.y,
+                         view.pose.position.z, view.fov.angleLeft, view.fov.angleRight,
+                         view.fov.angleUp, view.fov.angleDown,
+                         static_cast<unsigned long long>(viewState.viewStateFlags));
+                }
+            }
         } else {
             ++g.locateFallbackCount;
             if (g.locateFallbackCount <= 10 || g.locateFallbackCount % 300 == 0) {
@@ -1223,62 +1636,104 @@ Java_paulscode_android_mupen64plusae_questvr_QuestVrBridge_nativeRenderFrame(
             }
         }
 
-        const uint32_t compositionViewCount = static_cast<uint32_t>(g.swapchains.size());
-        layerViews.assign(compositionViewCount, {XR_TYPE_COMPOSITION_LAYER_PROJECTION_VIEW});
-        const bool diagnosticColor = g.submittedLayerCount < STARTUP_DIAGNOSTIC_LAYER_COUNT;
-        bool rendered = true;
-        for (uint32_t eye = 0; eye < compositionViewCount; ++eye) {
-            Swapchain& swapchain = g.swapchains[eye];
-            XrSwapchainImageAcquireInfo acquireInfo{XR_TYPE_SWAPCHAIN_IMAGE_ACQUIRE_INFO};
-            uint32_t imageIndex = 0;
-            if (!xrOk(xrAcquireSwapchainImage(swapchain.handle, &acquireInfo, &imageIndex),
-                    "xrAcquireSwapchainImage")) {
-                rendered = false;
-                break;
+        const bool headLockedProof =
+                g.visibleLayerSubmissionCount < STARTUP_QUAD_VISIBLE_LAYER_COUNT;
+        const bool projectionProof = g.visibleLayerSubmissionCount >=
+                    STARTUP_QUAD_VISIBLE_LAYER_COUNT &&
+                g.visibleLayerSubmissionCount < STARTUP_QUAD_VISIBLE_LAYER_COUNT +
+                    STARTUP_PROJECTION_VISIBLE_LAYER_COUNT;
+
+        if (headLockedProof) {
+            content = RenderContent::HeadLockedDiagnostic;
+            if (acquireRenderRelease(0, content)) {
+                const Swapchain& swapchain = g.swapchains[0];
+                diagnosticQuad.layerFlags = 0;
+                diagnosticQuad.space = g.viewSpace;
+                diagnosticQuad.eyeVisibility = XR_EYE_VISIBILITY_BOTH;
+                diagnosticQuad.subImage.swapchain = swapchain.handle;
+                diagnosticQuad.subImage.imageRect.offset = {0, 0};
+                diagnosticQuad.subImage.imageRect.extent =
+                        {swapchain.width, swapchain.height};
+                diagnosticQuad.subImage.imageArrayIndex = 0;
+                setIdentity(diagnosticQuad.pose);
+                diagnosticQuad.pose.position.z = -1.5f;
+                diagnosticQuad.size = {1.60f, 0.90f};
+                layers[0] = reinterpret_cast<const XrCompositionLayerBaseHeader*>(
+                        &diagnosticQuad);
+                layerCount = 1;
+                if (shouldLogDetailedFrame()) {
+                    LOGI("frame=%u layer=QUAD space=%p eye=BOTH swapchain=%p "
+                         "rect=[0,0 %dx%d] array=0 pose=[identity, 0 0 -1.5] size=1.60x0.90",
+                         g.begunFrameCount, reinterpret_cast<void*>(diagnosticQuad.space),
+                         reinterpret_cast<void*>(swapchain.handle), swapchain.width,
+                         swapchain.height);
+                }
+            }
+        } else {
+            const bool sourceReady = g.sourceBlitReady && g.sourceTexture != 0 &&
+                                     g.newSourceFrameCount != 0;
+            content = projectionProof || !sourceReady
+                    ? RenderContent::StereoDiagnostic
+                    : RenderContent::SourceTexture;
+            if (!projectionProof && !sourceReady &&
+                    (g.begunFrameCount <= STARTUP_DETAILED_FRAME_COUNT ||
+                     g.begunFrameCount % PERIODIC_DETAILED_FRAME_INTERVAL == 0)) {
+                LOGW("Source bridge not ready after diagnostic phases: blitReady=%d texture=%u "
+                     "latchCalls=%u newFrames=%u; retaining red/blue projection proof",
+                     g.sourceBlitReady ? 1 : 0, g.sourceTexture, g.sourceFrameLatchCalls,
+                     g.newSourceFrameCount);
             }
 
-            XrSwapchainImageWaitInfo imageWait{XR_TYPE_SWAPCHAIN_IMAGE_WAIT_INFO};
-            imageWait.timeout = XR_INFINITE_DURATION;
-            const bool imageReady = xrOk(xrWaitSwapchainImage(swapchain.handle, &imageWait),
-                                         "xrWaitSwapchainImage");
-            if (!imageReady) {
-                // A successfully acquired image cannot be safely released until its wait has
-                // completed. Tear down the session on the next Java iteration instead.
-                g.exitRequested = true;
-                rendered = false;
-                break;
+            const uint32_t compositionViewCount =
+                    static_cast<uint32_t>(g.swapchains.size());
+            layerViews.assign(compositionViewCount,
+                              {XR_TYPE_COMPOSITION_LAYER_PROJECTION_VIEW});
+            bool rendered = true;
+            for (uint32_t eye = 0; eye < compositionViewCount; ++eye) {
+                if (!acquireRenderRelease(eye, content)) {
+                    rendered = false;
+                    break;
+                }
+
+                Swapchain& swapchain = g.swapchains[eye];
+                XrCompositionLayerProjectionView& view = layerViews[eye];
+                const bool useSourceView = content == RenderContent::SourceTexture &&
+                                           validPose && g.stereoSourceActive &&
+                                           g.sourceViewsValid && eye < 2;
+                const uint32_t sourceEye = g.configurationSwapEyes && eye < 2
+                        ? 1U - eye : eye;
+                const XrView& renderedView = useSourceView
+                        ? g.sourceViews[sourceEye]
+                        : (validPose ? g.views[eye] : fallbackViews[eye]);
+                view.pose = renderedView.pose;
+                view.fov = renderedView.fov;
+                view.subImage.swapchain = swapchain.handle;
+                view.subImage.imageRect.offset = {0, 0};
+                view.subImage.imageRect.extent = {swapchain.width, swapchain.height};
+                view.subImage.imageArrayIndex = 0;
+                if (shouldLogDetailedFrame()) {
+                    LOGI("frame=%u projectionView=%u content=%s swapchain=%p "
+                         "rect=[0,0 %dx%d] array=0 pose=[q %.4f %.4f %.4f %.4f, "
+                         "p %.4f %.4f %.4f] fov=[L %.4f R %.4f U %.4f D %.4f]",
+                         g.begunFrameCount, eye, renderContentName(content),
+                         reinterpret_cast<void*>(swapchain.handle), swapchain.width,
+                         swapchain.height, view.pose.orientation.x, view.pose.orientation.y,
+                         view.pose.orientation.z, view.pose.orientation.w,
+                         view.pose.position.x, view.pose.position.y, view.pose.position.z,
+                         view.fov.angleLeft, view.fov.angleRight, view.fov.angleUp,
+                         view.fov.angleDown);
+                }
             }
 
-            rendered = renderEye(eye, imageIndex, diagnosticColor);
-            XrSwapchainImageReleaseInfo releaseInfo{XR_TYPE_SWAPCHAIN_IMAGE_RELEASE_INFO};
-            const bool released = xrOk(xrReleaseSwapchainImage(swapchain.handle, &releaseInfo),
-                                       "xrReleaseSwapchainImage");
-            if (!rendered || !released) {
-                rendered = false;
-                break;
+            if (rendered) {
+                projectionLayer.layerFlags = 0;
+                projectionLayer.space = validPose ? g.localSpace : g.viewSpace;
+                projectionLayer.viewCount = static_cast<uint32_t>(layerViews.size());
+                projectionLayer.views = layerViews.data();
+                layers[0] = reinterpret_cast<const XrCompositionLayerBaseHeader*>(
+                        &projectionLayer);
+                layerCount = 1;
             }
-
-            XrCompositionLayerProjectionView& view = layerViews[eye];
-            const bool useSourceView = validPose && g.stereoSourceActive &&
-                                       g.sourceViewsValid && eye < 2;
-            const uint32_t sourceEye = g.configurationSwapEyes && eye < 2 ? 1U - eye : eye;
-            const XrView& renderedView = useSourceView
-                ? g.sourceViews[sourceEye]
-                : (validPose ? g.views[eye] : fallbackViews[eye]);
-            view.pose = renderedView.pose;
-            view.fov = renderedView.fov;
-            view.subImage.swapchain = swapchain.handle;
-            view.subImage.imageRect.offset = {0, 0};
-            view.subImage.imageRect.extent = {swapchain.width, swapchain.height};
-            view.subImage.imageArrayIndex = 0;
-        }
-
-        if (rendered) {
-            layer.space = validPose ? g.localSpace : g.viewSpace;
-            layer.viewCount = static_cast<uint32_t>(layerViews.size());
-            layer.views = layerViews.data();
-            layers[0] = reinterpret_cast<const XrCompositionLayerBaseHeader*>(&layer);
-            layerCount = 1;
         }
     } else {
         ++g.shouldRenderFalseCount;
@@ -1292,10 +1747,17 @@ Java_paulscode_android_mupen64plusae_questvr_QuestVrBridge_nativeRenderFrame(
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
     XrFrameEndInfo endInfo{XR_TYPE_FRAME_END_INFO};
     endInfo.displayTime = frameState.predictedDisplayTime;
-    endInfo.environmentBlendMode = XR_ENVIRONMENT_BLEND_MODE_OPAQUE;
+    endInfo.environmentBlendMode = g.environmentBlendMode;
     endInfo.layerCount = layerCount;
     endInfo.layers = layerCount == 0 ? nullptr : layers.data();
-    const bool submitted = xrOk(xrEndFrame(g.session, &endInfo), "xrEndFrame");
+    if (shouldLogDetailedFrame()) {
+        LOGI("frame=%u xrEndFrame input displayTime=%lld blendMode=%d layerCount=%u "
+             "content=%s layerPtr=%p",
+             g.begunFrameCount, static_cast<long long>(endInfo.displayTime),
+             static_cast<int>(endInfo.environmentBlendMode), layerCount,
+             renderContentName(content), layerCount == 0 ? nullptr : layers[0]);
+    }
+    const bool submitted = xrFrameOk(xrEndFrame(g.session, &endInfo), "xrEndFrame");
     const Clock::time_point nativeFrameEnd = Clock::now();
     if (!submitted) {
         return JNI_FALSE;
@@ -1311,10 +1773,18 @@ Java_paulscode_android_mupen64plusae_questvr_QuestVrBridge_nativeRenderFrame(
     if (layerCount != 0) {
         ++g.submittedLayerCount;
         ++g.renderedLayerFrameCount;
-        if (g.submittedLayerCount == 1) {
-            LOGI("First OpenXR projection layer submitted successfully (startup red/blue active)");
-        } else if (g.submittedLayerCount == STARTUP_DIAGNOSTIC_LAYER_COUNT) {
-            LOGI("Startup red/blue interval complete; presenting emulator source texture");
+        if (isSessionVisible()) {
+            ++g.visibleLayerSubmissionCount;
+            if (g.visibleLayerSubmissionCount == 1) {
+                LOGI("First VISIBLE OpenXR layer submitted: bright green head-locked quad");
+            } else if (g.visibleLayerSubmissionCount == STARTUP_QUAD_VISIBLE_LAYER_COUNT) {
+                LOGI("Green head-locked proof complete after %u visible layers; next frame starts "
+                     "red/blue projection proof", g.visibleLayerSubmissionCount);
+            } else if (g.visibleLayerSubmissionCount == STARTUP_QUAD_VISIBLE_LAYER_COUNT +
+                    STARTUP_PROJECTION_VISIBLE_LAYER_COUNT) {
+                LOGI("Projection proof complete after %u visible layers; next frame uses the "
+                     "emulator SurfaceTexture when ready", g.visibleLayerSubmissionCount);
+            }
         }
     }
     g.waitFrameMilliseconds += waitMilliseconds;
@@ -1322,25 +1792,29 @@ Java_paulscode_android_mupen64plusae_questvr_QuestVrBridge_nativeRenderFrame(
     g.workMilliseconds += workMilliseconds;
     g.maximumWorkMilliseconds = std::max(g.maximumWorkMilliseconds, workMilliseconds);
 
-    if (g.debugLogging && g.timingSampleCount >= 300) {
+    if (g.timingSampleCount >= PERIODIC_DETAILED_FRAME_INTERVAL) {
         const double divisor = static_cast<double>(g.timingSampleCount);
         const int eyeWidth = g.swapchains.empty() ? 0 : g.swapchains[0].width;
         const int eyeHeight = g.swapchains.empty() ? 0 : g.swapchains[0].height;
         const double sourcePoseAgeMilliseconds = g.sourceViewsValid
             ? static_cast<double>(frameState.predictedDisplayTime - g.sourceViewDisplayTime) / 1.0e6
             : -1.0;
-        LOGI("timing samples=%u submitted=%u layers=%u avgWait=%.2fms "
+        LOGI("periodic status samples=%u submitted=%u layers=%u visibleLayers=%u state=%s "
+             "avgWait=%.2fms "
              "avgNative=%.2fms avgWork=%.2fms maxWork=%.2fms "
              "source=%dx%d stereo=%d swapEyes=%d eye=%dx%d sourcePoseAge=%.2fms "
-             "poseMatches=%u poseMisses=%u textureTs=%lld",
+             "poseMatches=%u poseMisses=%u textureTs=%lld latchCalls=%u newSourceFrames=%u "
+             "sourceBlitReady=%d",
              g.timingSampleCount, g.submittedFrameCount, g.renderedLayerFrameCount,
+             g.visibleLayerSubmissionCount, sessionStateName(g.sessionState),
              g.waitFrameMilliseconds / divisor, g.nativeFrameMilliseconds / divisor,
              g.workMilliseconds / divisor, g.maximumWorkMilliseconds,
              g.sourceWidth, g.sourceHeight,
              g.stereoSourceActive ? 1 : 0, g.configurationSwapEyes ? 1 : 0,
              eyeWidth, eyeHeight,
              sourcePoseAgeMilliseconds, g.sourcePoseMatches, g.sourcePoseMisses,
-             static_cast<long long>(g.sourceTextureTimestamp));
+             static_cast<long long>(g.sourceTextureTimestamp), g.sourceFrameLatchCalls,
+             g.newSourceFrameCount, g.sourceBlitReady ? 1 : 0);
         g.timingSampleCount = 0;
         g.renderedLayerFrameCount = 0;
         g.waitFrameMilliseconds = 0.0;

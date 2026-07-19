@@ -5,6 +5,7 @@ find_package(OpenXR REQUIRED CONFIG)
 
 add_library(mupen64plus-quest-vr SHARED
     QuestVrBridge.cpp
+    QuestVrDiagnostics.cpp
     QuestVrRuntimeBootstrap.cpp
 )
 

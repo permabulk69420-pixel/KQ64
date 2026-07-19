@@ -6,6 +6,8 @@ import android.os.SystemClock;
 import android.util.Log;
 import android.view.View;
 
+import java.io.File;
+
 /**
  * Thin Java owner for the optional OpenXR presentation path.
  *
@@ -64,20 +66,27 @@ public final class QuestVrBridge {
             shown = decor != null && decor.isShown();
             focused = activity.hasWindowFocus();
             if (attached && shown && focused) {
-                Log.i(TAG, "Android immersive window is attached, shown, and focused");
+                QuestVrDiagnostics.info(TAG,
+                        "Android immersive window is attached, shown, and focused");
                 return;
             }
             SystemClock.sleep(16L);
         } while (SystemClock.uptimeMillis() < deadline && !activity.isFinishing() && !activity.isDestroyed());
 
-        Log.w(TAG, "OpenXR window readiness wait expired; continuing with attached=" + attached +
-                " shown=" + shown + " focused=" + focused);
+        QuestVrDiagnostics.warn(TAG,
+                "OpenXR window readiness wait expired; continuing with attached=" + attached +
+                        " shown=" + shown + " focused=" + focused);
     }
 
     public static boolean initialize(Activity activity) {
         if (!sLibraryLoaded) {
             return false;
         }
+
+        final File diagnosticLog = QuestVrDiagnostics.getLatestLogFile(activity);
+        nativeConfigureDiagnosticLog(diagnosticLog.getAbsolutePath());
+        QuestVrDiagnostics.info(TAG, "initialize entry activity=" + activity.getClass().getName() +
+                " finishing=" + activity.isFinishing() + " destroyed=" + activity.isDestroyed());
 
         // Claim the render-thread lifetime before the hand-off begins so a racing
         // SurfaceView.surfaceDestroyed callback cannot tear the EGL context down underneath JNI.
@@ -86,23 +95,27 @@ public final class QuestVrBridge {
         // Queue one real Android buffer while the original window surface is still current. This
         // completes the visible Activity side of Quest's 2D-to-immersive transition.
         if (!nativePrimeAndroidSurface()) {
-            Log.w(TAG, "Android bootstrap frame failed; attempting OpenXR initialization anyway");
+            QuestVrDiagnostics.warn(TAG,
+                    "Android bootstrap frame failed; attempting OpenXR initialization anyway");
         }
 
         // Move the exact EGL context that OpenXR will bind onto a persistent pbuffer BEFORE session
         // creation. Quest may retire the Android window as soon as xrCreateSession is accepted, so
         // parking afterwards leaves a race that looks exactly like a brief flash followed by Home.
         if (!nativeParkEglContext()) {
-            Log.e(TAG, "Unable to park EGL before OpenXR session creation; retaining Android presentation");
+            QuestVrDiagnostics.error(TAG,
+                    "Unable to park EGL before OpenXR session creation; retaining Android presentation",
+                    null);
             sPresentationLifecycleOwned = false;
             return false;
         }
-        Log.i(TAG, "OpenXR EGL context parked before session creation");
+        QuestVrDiagnostics.info(TAG, "OpenXR EGL context parked before session creation");
 
         awaitImmersiveWindow(activity);
         if (!nativeInitialize(activity)) {
             if (!nativeReleaseParkedEglContext()) {
-                Log.w(TAG, "Unable to restore Android presentation after failed OpenXR initialization");
+                QuestVrDiagnostics.warn(TAG,
+                        "Unable to restore Android presentation after failed OpenXR initialization");
             }
             sPresentationLifecycleOwned = false;
             return false;
@@ -114,8 +127,9 @@ public final class QuestVrBridge {
     public static void setSourceTexture(int texture, int width, int height, boolean requestStereo) {
         if (sLibraryLoaded) {
             if (texture != 0 && !sSourceTextureLogged) {
-                Log.i(TAG, "Handing emulator source texture " + texture + " (" + width + "x" + height +
-                        ", stereo=" + requestStereo + ") to OpenXR");
+                QuestVrDiagnostics.info(TAG, "Handing emulator source texture " + texture +
+                        " (" + width + "x" + height + ", stereo=" + requestStereo +
+                        ") to OpenXR");
                 sSourceTextureLogged = true;
             }
             nativeSetSourceTexture(texture, width, height, requestStereo);
@@ -162,11 +176,13 @@ public final class QuestVrBridge {
 
     public static void shutdown() {
         if (sLibraryLoaded) {
+            QuestVrDiagnostics.info(TAG, "shutdown entry");
             try {
                 nativeShutdown();
             } finally {
                 if (!nativeReleaseParkedEglContext()) {
-                    Log.w(TAG, "Unable to release the parked OpenXR EGL pbuffer cleanly");
+                    QuestVrDiagnostics.warn(TAG,
+                            "Unable to release the parked OpenXR EGL pbuffer cleanly");
                 }
                 sPresentationLifecycleOwned = false;
                 sSourceTextureLogged = false;
@@ -175,6 +191,7 @@ public final class QuestVrBridge {
     }
 
     private static native boolean nativePrimeAndroidSurface();
+    private static native void nativeConfigureDiagnosticLog(String path);
     private static native boolean nativeParkEglContext();
     private static native boolean nativeReleaseParkedEglContext();
     private static native boolean nativeInitialize(Activity activity);
