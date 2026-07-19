@@ -55,6 +55,8 @@ void DepthBuffer::_initDepthImageTexture(FrameBuffer * _pBuffer, CachedTexture& 
 	_cachedTexture.mirrorS = 0;
 	_cachedTexture.mirrorT = 0;
 	_cachedTexture.textureBytes = _cachedTexture.width * _cachedTexture.height * fbTexFormat.depthImageFormatBytes;
+	if (QuestVr::isPackedFramebufferTexture(static_cast<u32>(_pBuffer->m_pTexture->name)))
+		QuestVr::markPackedFramebufferTexture(static_cast<u32>(_cachedTexture.name));
 
 	{
 		Context::InitTextureParams params;
@@ -148,6 +150,11 @@ void DepthBuffer::_initDepthBufferTexture(const FrameBuffer * _pBuffer, CachedTe
 	_pTexture->mirrorS = 0;
 	_pTexture->mirrorT = 0;
 	_pTexture->textureBytes = _pTexture->width * _pTexture->height * fbTexFormat.depthFormatBytes;
+	const bool packedSource = _pBuffer != nullptr ?
+		QuestVr::isPackedFramebufferTexture(static_cast<u32>(_pBuffer->m_pTexture->name)) :
+		QuestVr::framebufferWidthMultiplier() > 1U;
+	if (packedSource)
+		QuestVr::markPackedFramebufferTexture(static_cast<u32>(_pTexture->name));
 
 	Context::InitTextureParams initParams;
 	initParams.handle = _pTexture->name;
