@@ -8,12 +8,23 @@ on:
     paths:
       - tools/quest-vr-packed-target-fix.patch
       - .github/workflows/apply-quest-vr-packed-target-fix.yml
+  pull_request:
+    branches:
+      - quest-vr-prototype
+    types:
+      - opened
+      - synchronize
+      - reopened
+    paths:
+      - tools/quest-vr-packed-target-fix.patch
+      - .github/workflows/apply-quest-vr-packed-target-fix.yml
 
 permissions:
   contents: write
 
 jobs:
   apply-patch:
+    if: github.head_ref == 'ppsspp-openxr-audit' || github.ref_name == 'ppsspp-openxr-audit'
     runs-on: ubuntu-latest
     steps:
       - name: Check out audit branch
