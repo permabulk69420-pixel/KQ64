@@ -37,6 +37,7 @@ import paulscode.android.mupen64plusae.persistent.ConfigFile;
 import paulscode.android.mupen64plusae.persistent.GLideN64Prefs;
 import paulscode.android.mupen64plusae.persistent.GamePrefs;
 import paulscode.android.mupen64plusae.persistent.GlobalPrefs;
+import paulscode.android.mupen64plusae.questvr.QuestVrDiagnostics;
 
 class NativeConfigFiles
 {
@@ -62,6 +63,10 @@ class NativeConfigFiles
                                    int renderWidth, int renderHeight, boolean usingNetplay)
     {
         //@formatter:off
+
+        QuestVrDiagnostics.info("NativeConfigFiles", "Writing renderer target ScreenWidth=" +
+                renderWidth + " ScreenHeight=" + renderHeight + " pixels=" +
+                ((long) renderWidth * renderHeight));
 
         supportsFullGl = AppData.doesSupportFullGL();
 

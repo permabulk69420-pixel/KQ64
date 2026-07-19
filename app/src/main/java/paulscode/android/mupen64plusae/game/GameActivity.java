@@ -581,10 +581,10 @@ public class GameActivity extends AppCompatActivity implements PromptConfirmList
         if(mCoreFragment != null)
         {
             if (!mCoreFragment.IsInProgress()) {
+                final int[] videoRenderSize = getVideoRenderSize();
                 mCoreFragment.startCore(mGlobalPrefs, mGamePrefs, mRomGoodName, mRomDisplayName, mRomPath, mZipPath,
                         mRomMd5, mRomCrc, mRomHeaderName, mRomCountryCode, mRomArtPath, mDoRestart,
-                        getVideoRenderWidth(),
-                        mDisplayResolutionData.getResolutionHeight(mGamePrefs.verticalRenderResolution),
+                        videoRenderSize[0], videoRenderSize[1],
                         mIsNetplayEnabled);
             }
 
@@ -597,24 +597,37 @@ public class GameActivity extends AppCompatActivity implements PromptConfirmList
         mGameSurface.startGlContext();
     }
 
-    private int getVideoRenderWidth()
+    private int[] getVideoRenderSize()
     {
         final int baseWidth =
                 mDisplayResolutionData.getResolutionWidth(mGamePrefs.verticalRenderResolution);
+        final int baseHeight =
+                mDisplayResolutionData.getResolutionHeight(mGamePrefs.verticalRenderResolution);
         final QuestVrSettings.Configuration vr = QuestVrSettings.load(this);
         if (!vr.enabled || !vr.stereoEnabled ||
                 mGamePrefs.videoPluginLib != AppData.VideoPlugin.GLIDEN64 ||
                 !QuestVrBridge.isNativeLibraryLoaded()) {
-            return baseWidth;
+            QuestVrDiagnostics.info(TAG, "Producer resolution uses flat path base=" +
+                    baseWidth + "x" + baseHeight + " vrEnabled=" + vr.enabled +
+                    " stereo=" + vr.stereoEnabled + " plugin=" +
+                    mGamePrefs.videoPluginLib + " nativeLibraryLoaded=" +
+                    QuestVrBridge.isNativeLibraryLoaded());
+            return new int[] {baseWidth, baseHeight};
         }
 
-        final float widthScale = Math.max(1.0f, Math.min(2.0f, vr.stereoSourceWidthScale));
-        final int maximumWidth = Math.max(baseWidth, vr.maxStereoSourceWidth);
-        int stereoWidth = Math.min(maximumWidth, Math.round(baseWidth * widthScale));
-        stereoWidth = Math.min(maximumWidth & ~1, (stereoWidth + 1) & ~1);
-        stereoWidth = Math.max(baseWidth, stereoWidth);
-        Log.i(TAG, "Quest VR stereo source width " + baseWidth + " -> " + stereoWidth);
-        return stereoWidth;
+        final QuestVrSettings.SourceRenderSize size =
+                QuestVrSettings.resolveStereoSourceSize(baseWidth, baseHeight, vr);
+        QuestVrDiagnostics.info(TAG, "Quest VR producer resolution base=" +
+                size.baseWidth + "x" + size.baseHeight + " widthScale=" +
+                vr.stereoSourceWidthScale + " requested=" + size.requestedWidth + "x" +
+                size.requestedHeight + " effective=" + size.actualWidth + "x" +
+                size.actualHeight + " contentAspect=" + size.contentAspect +
+                " downscale=" + size.downscale + " clamped=" + size.clamped +
+                " userWidthCap=" + vr.maxStereoSourceWidth + " hardLimits=" +
+                QuestVrSettings.SAFE_MAX_SOURCE_WIDTH + "x" +
+                QuestVrSettings.SAFE_MAX_SOURCE_HEIGHT + "/" +
+                QuestVrSettings.SAFE_MAX_SOURCE_PIXELS + "px");
+        return new int[] {size.actualWidth, size.actualHeight};
     }
 
     @Override

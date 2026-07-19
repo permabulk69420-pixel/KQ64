@@ -132,6 +132,7 @@ struct State {
     GLuint sourceTexture{0};
     int sourceWidth{0};
     int sourceHeight{0};
+    float sourceContentAspect{4.0f / 3.0f};
     bool stereoRequested{false};
     bool stereoSourceActive{false};
 
@@ -154,6 +155,9 @@ struct State {
     bool configurationStereoEnabled{true};
     bool configurationSwapEyes{false};
     float configurationIpdMeters{0.064f};
+    float configurationScreenScale{1.0f};
+    float configurationScreenDistanceMeters{2.0f};
+    bool configurationStartupProofLayers{false};
     float configurationWorldUnitsPerMeter{64.0f};
     float configurationRotationStrength{1.0f};
     bool configurationPositionEnabled{false};
@@ -167,6 +171,10 @@ struct State {
     float configurationMarioKartCameraOffsetZ{-0.75f};
     bool touchControllerEnabled{true};
     bool debugLogging{false};
+    XrPosef screenPose{};
+    bool screenPoseValid{false};
+    bool screenRecenterPending{true};
+    uint32_t screenAnchorCount{0};
     std::array<PoseHistoryEntry, 256> poseHistory{};
     size_t poseHistoryWriteIndex{0};
     std::array<XrView, 2> sourceViews{};
@@ -425,6 +433,71 @@ bool createControllerActions() {
 void setIdentity(XrPosef& pose) {
     pose = {};
     pose.orientation.w = 1.0f;
+}
+
+XrQuaternionf normalizeQuaternion(XrQuaternionf quaternion) {
+    const float lengthSquared = quaternion.x * quaternion.x +
+        quaternion.y * quaternion.y + quaternion.z * quaternion.z +
+        quaternion.w * quaternion.w;
+    if (!std::isfinite(lengthSquared) || lengthSquared < 1.0e-12f) {
+        return {0.0f, 0.0f, 0.0f, 1.0f};
+    }
+    const float inverseLength = 1.0f / std::sqrt(lengthSquared);
+    quaternion.x *= inverseLength;
+    quaternion.y *= inverseLength;
+    quaternion.z *= inverseLength;
+    quaternion.w *= inverseLength;
+    return quaternion;
+}
+
+XrVector3f rotateVector(const XrQuaternionf& rawQuaternion, const XrVector3f& vector) {
+    const XrQuaternionf quaternion = normalizeQuaternion(rawQuaternion);
+    const XrVector3f uv{
+        quaternion.y * vector.z - quaternion.z * vector.y,
+        quaternion.z * vector.x - quaternion.x * vector.z,
+        quaternion.x * vector.y - quaternion.y * vector.x,
+    };
+    const XrVector3f uuv{
+        quaternion.y * uv.z - quaternion.z * uv.y,
+        quaternion.z * uv.x - quaternion.x * uv.z,
+        quaternion.x * uv.y - quaternion.y * uv.x,
+    };
+    return {
+        vector.x + 2.0f * (quaternion.w * uv.x + uuv.x),
+        vector.y + 2.0f * (quaternion.w * uv.y + uuv.y),
+        vector.z + 2.0f * (quaternion.w * uv.z + uuv.z),
+    };
+}
+
+void anchorScreenToCurrentView(uint32_t viewCount) {
+    if (viewCount == 0 || g.views.empty()) {
+        return;
+    }
+    const XrPosef& leftPose = g.views[0].pose;
+    XrVector3f center = leftPose.position;
+    if (viewCount > 1 && g.views.size() > 1) {
+        center.x = (leftPose.position.x + g.views[1].pose.position.x) * 0.5f;
+        center.y = (leftPose.position.y + g.views[1].pose.position.y) * 0.5f;
+        center.z = (leftPose.position.z + g.views[1].pose.position.z) * 0.5f;
+    }
+    const XrQuaternionf orientation = normalizeQuaternion(leftPose.orientation);
+    const XrVector3f offset = rotateVector(orientation,
+        {0.0f, 0.0f, -g.configurationScreenDistanceMeters});
+    g.screenPose.orientation = orientation;
+    g.screenPose.position = {
+        center.x + offset.x,
+        center.y + offset.y,
+        center.z + offset.z,
+    };
+    g.screenPoseValid = true;
+    g.screenRecenterPending = false;
+    ++g.screenAnchorCount;
+    LOGI("World-locked screen anchored count=%u distance=%.3fm pose=[q %.4f %.4f "
+         "%.4f %.4f, p %.4f %.4f %.4f] space=LOCAL",
+         g.screenAnchorCount, g.configurationScreenDistanceMeters,
+         g.screenPose.orientation.x, g.screenPose.orientation.y,
+         g.screenPose.orientation.z, g.screenPose.orientation.w,
+         g.screenPose.position.x, g.screenPose.position.y, g.screenPose.position.z);
 }
 
 GLuint compileShader(GLenum type, const char* source) {
@@ -699,11 +772,12 @@ void syncControllerInput() {
     const bool rightClick = readBooleanAction(g.controllerActions.rightStickClick);
     const bool recenterChord = leftClick && rightClick;
     if (recenterChord && !g.recenterChordDown) {
+        g.screenRecenterPending = true;
         resolveRendererBridge();
         if (g.recenterVr != nullptr) {
             g.recenterVr();
-            LOGI("Recentered VR view from Touch thumbstick chord");
         }
+        LOGI("Requested game-screen and GLideN64 recenter from Touch thumbstick chord");
     } else if (rightClick && !leftClick) {
         buttons |= start;
     }
@@ -1038,10 +1112,11 @@ void pollEvents() {
                  static_cast<int>(change->referenceSpaceType),
                  static_cast<long long>(change->changeTime), change->poseValid ? 1 : 0);
             resolveRendererBridge();
+            g.screenRecenterPending = true;
             if (g.recenterVr != nullptr) {
                 g.recenterVr();
-                LOGI("Recentered GLideN64 head pose after OpenXR reference-space change");
             }
+            LOGI("Queued game-screen and GLideN64 recenter after OpenXR reference-space change");
         }
         event = {XR_TYPE_EVENT_DATA_BUFFER};
     }
@@ -1091,18 +1166,11 @@ bool renderEye(uint32_t eye, uint32_t imageIndex, RenderContent content) {
         const float uvOffsetX = stereo ? (sourceEye == 0 ? 0.0f : 0.5f) : 0.0f;
         glUniform4f(g.uvTransformUniform, uvScaleX, 1.0f, uvOffsetX, 0.0f);
 
-        float scaleX = 1.0f;
-        float scaleY = 1.0f;
-        if (!stereo && g.sourceWidth > 0 && g.sourceHeight > 0) {
-            const float sourceAspect = static_cast<float>(g.sourceWidth) / static_cast<float>(g.sourceHeight);
-            const float targetAspect = static_cast<float>(swapchain.width) / static_cast<float>(swapchain.height);
-            if (sourceAspect > targetAspect) {
-                scaleY = targetAspect / sourceAspect;
-            } else {
-                scaleX = sourceAspect / targetAspect;
-            }
-        }
-        glUniform2f(g.quadScaleUniform, scaleX, scaleY);
+        // The compositor maps this full swapchain image onto a quad whose physical dimensions
+        // carry the game's content aspect. Filling the swapchain here avoids baking a second set
+        // of black bars into the cinema screen and correctly restores the pixel aspect of a
+        // reduced-width side-by-side stereo producer.
+        glUniform2f(g.quadScaleUniform, 1.0f, 1.0f);
         glDrawArrays(GL_TRIANGLES, 0, 6);
     }
 
@@ -1415,8 +1483,9 @@ bool initializeOpenXr(JNIEnv* env, jobject activity) {
     }
 
     g.initialized = true;
-    LOGI("OpenXR presentation bridge initialized on GLES %d.%d; first proof is a green "
-         "head-locked quad independent of SurfaceTexture and tracking", major, minor);
+    LOGI("OpenXR presentation bridge initialized on GLES %d.%d; normal launches submit the "
+         "game on a LOCAL-space world-locked quad (startup proof layers are debug-only)",
+         major, minor);
     return true;
 }
 
@@ -1435,18 +1504,23 @@ Java_paulscode_android_mupen64plusae_questvr_QuestVrBridge_nativeInitialize(
 
 extern "C" JNIEXPORT void JNICALL
 Java_paulscode_android_mupen64plusae_questvr_QuestVrBridge_nativeSetSourceTexture(
-        JNIEnv*, jclass, jint texture, jint width, jint height, jboolean requestStereo) {
+        JNIEnv*, jclass, jint texture, jint width, jint height, jboolean requestStereo,
+        jfloat contentAspect) {
     g.sourceTexture = static_cast<GLuint>(texture);
     g.sourceWidth = width;
     g.sourceHeight = height;
+    g.sourceContentAspect = std::isfinite(contentAspect)
+        ? std::clamp(static_cast<float>(contentAspect), 0.5f, 3.0f)
+        : 4.0f / 3.0f;
     g.stereoRequested = requestStereo == JNI_TRUE;
     resolveRendererBridge();
     g.stereoSourceActive = g.setVrEnabled != nullptr && g.stereoRequested &&
                            g.configurationStereoEnabled;
-    LOGI("Source texture update tid=%ld texture=%d size=%dx%d requestStereo=%d "
-         "stereoActive=%d blitReady=%d currentContext=%p",
+    LOGI("Source texture update tid=%ld texture=%d size=%dx%d contentAspect=%.4f "
+         "requestStereo=%d stereoActive=%d blitReady=%d currentContext=%p",
          QuestVrDiagnostics::currentThreadId(), texture, width, height,
-         requestStereo == JNI_TRUE ? 1 : 0, g.stereoSourceActive ? 1 : 0,
+         g.sourceContentAspect, requestStereo == JNI_TRUE ? 1 : 0,
+         g.stereoSourceActive ? 1 : 0,
          g.sourceBlitReady ? 1 : 0, eglGetCurrentContext());
     if (texture == 0) {
         g.sourceViewsValid = false;
@@ -1477,6 +1551,7 @@ Java_paulscode_android_mupen64plusae_questvr_QuestVrBridge_nativeOnSourceFrameLa
 extern "C" JNIEXPORT void JNICALL
 Java_paulscode_android_mupen64plusae_questvr_QuestVrBridge_nativeConfigure(
         JNIEnv*, jclass, jboolean stereoEnabled, jboolean swapEyes, jfloat ipdMeters,
+        jfloat screenScale, jfloat screenDistanceMeters, jboolean startupProofLayers,
         jfloat worldUnitsPerMeter, jfloat rotationStrength, jboolean positionEnabled,
         jfloat maxTranslationMeters, jfloat cameraOffsetX, jfloat cameraOffsetY,
         jfloat cameraOffsetZ, jboolean useOpenXrFov, jboolean marioKartProfileEnabled,
@@ -1485,6 +1560,12 @@ Java_paulscode_android_mupen64plusae_questvr_QuestVrBridge_nativeConfigure(
     g.configurationStereoEnabled = stereoEnabled == JNI_TRUE;
     g.configurationSwapEyes = swapEyes == JNI_TRUE;
     g.configurationIpdMeters = ipdMeters;
+    g.configurationScreenScale = std::isfinite(screenScale)
+        ? std::clamp(static_cast<float>(screenScale), 0.35f, 2.0f) : 1.0f;
+    g.configurationScreenDistanceMeters = std::isfinite(screenDistanceMeters)
+        ? std::clamp(static_cast<float>(screenDistanceMeters), 0.75f, 6.0f) : 2.0f;
+    g.configurationStartupProofLayers = startupProofLayers == JNI_TRUE;
+    g.screenRecenterPending = true;
     g.configurationWorldUnitsPerMeter = worldUnitsPerMeter;
     g.configurationRotationStrength = rotationStrength;
     g.configurationPositionEnabled = positionEnabled == JNI_TRUE;
@@ -1498,10 +1579,13 @@ Java_paulscode_android_mupen64plusae_questvr_QuestVrBridge_nativeConfigure(
     g.configurationMarioKartCameraOffsetZ = marioKartCameraOffsetZ;
     g.touchControllerEnabled = touchControllerEnabled == JNI_TRUE;
     g.debugLogging = debugLogging == JNI_TRUE;
-    LOGI("Quest VR configuration stereo=%d swapEyes=%d ipd=%.4f worldUnits=%.2f "
-         "rotation=%.2f position=%d maxTranslation=%.3f sourceBlitReady=%d debug=%d",
+    LOGI("Quest VR configuration stereo=%d swapEyes=%d ipd=%.4f screenScale=%.3f "
+         "screenDistance=%.3fm proofLayers=%d worldUnits=%.2f rotation=%.2f "
+         "position=%d maxTranslation=%.3f sourceBlitReady=%d debug=%d",
          g.configurationStereoEnabled ? 1 : 0, g.configurationSwapEyes ? 1 : 0,
-         g.configurationIpdMeters, g.configurationWorldUnitsPerMeter,
+         g.configurationIpdMeters, g.configurationScreenScale,
+         g.configurationScreenDistanceMeters,
+         g.configurationStartupProofLayers ? 1 : 0, g.configurationWorldUnitsPerMeter,
          g.configurationRotationStrength, g.configurationPositionEnabled ? 1 : 0,
          g.configurationMaxTranslationMeters, g.sourceBlitReady ? 1 : 0,
          g.debugLogging ? 1 : 0);
@@ -1520,10 +1604,12 @@ Java_paulscode_android_mupen64plusae_questvr_QuestVrBridge_nativeConfigure(
 extern "C" JNIEXPORT void JNICALL
 Java_paulscode_android_mupen64plusae_questvr_QuestVrBridge_nativeRecenter(
         JNIEnv*, jclass) {
+    g.screenRecenterPending = true;
     resolveRendererBridge();
     if (g.recenterVr != nullptr) {
         g.recenterVr();
     }
+    LOGI("Requested game-screen LOCAL-space anchor and GLideN64 pose recenter");
 }
 
 extern "C" JNIEXPORT jboolean JNICALL
@@ -1579,7 +1665,11 @@ Java_paulscode_android_mupen64plusae_questvr_QuestVrBridge_nativeRenderFrame(
     std::vector<XrCompositionLayerProjectionView> layerViews;
     XrCompositionLayerProjection projectionLayer{XR_TYPE_COMPOSITION_LAYER_PROJECTION};
     XrCompositionLayerQuad diagnosticQuad{XR_TYPE_COMPOSITION_LAYER_QUAD};
-    std::array<const XrCompositionLayerBaseHeader*, 1> layers{};
+    std::array<XrCompositionLayerQuad, 2> gameQuads{};
+    for (XrCompositionLayerQuad& quad : gameQuads) {
+        quad.type = XR_TYPE_COMPOSITION_LAYER_QUAD;
+    }
+    std::array<const XrCompositionLayerBaseHeader*, 2> layers{};
     uint32_t layerCount = 0;
     RenderContent content = RenderContent::HeadLockedDiagnostic;
 
@@ -1598,6 +1688,9 @@ Java_paulscode_android_mupen64plusae_questvr_QuestVrBridge_nativeRenderFrame(
             (viewState.viewStateFlags & XR_VIEW_STATE_POSITION_VALID_BIT) != 0;
         if (validPose) {
             publishHeadPose(frameState.predictedDisplayTime, viewCount);
+            if (g.screenRecenterPending || !g.screenPoseValid) {
+                anchorScreenToCurrentView(viewCount);
+            }
             if (shouldLogDetailedFrame()) {
                 for (uint32_t eye = 0; eye < viewCount; ++eye) {
                     const XrView& view = g.views[eye];
@@ -1615,7 +1708,7 @@ Java_paulscode_android_mupen64plusae_questvr_QuestVrBridge_nativeRenderFrame(
             ++g.locateFallbackCount;
             if (g.locateFallbackCount <= 10 || g.locateFallbackCount % 300 == 0) {
                 LOGW("Tracked views unavailable (result=%s count=%u flags=0x%llx); "
-                     "submitting VIEW-space fallback",
+                     "using the last LOCAL-space screen anchor and fallback proof views",
                      xrResultName(locateResult), viewCount,
                      static_cast<unsigned long long>(viewState.viewStateFlags));
             }
@@ -1636,9 +1729,10 @@ Java_paulscode_android_mupen64plusae_questvr_QuestVrBridge_nativeRenderFrame(
             }
         }
 
-        const bool headLockedProof =
+        const bool headLockedProof = g.configurationStartupProofLayers &&
                 g.visibleLayerSubmissionCount < STARTUP_QUAD_VISIBLE_LAYER_COUNT;
-        const bool projectionProof = g.visibleLayerSubmissionCount >=
+        const bool projectionProof = g.configurationStartupProofLayers &&
+                g.visibleLayerSubmissionCount >=
                     STARTUP_QUAD_VISIBLE_LAYER_COUNT &&
                 g.visibleLayerSubmissionCount < STARTUP_QUAD_VISIBLE_LAYER_COUNT +
                     STARTUP_PROJECTION_VISIBLE_LAYER_COUNT;
@@ -1669,21 +1763,8 @@ Java_paulscode_android_mupen64plusae_questvr_QuestVrBridge_nativeRenderFrame(
                          swapchain.height);
                 }
             }
-        } else {
-            const bool sourceReady = g.sourceBlitReady && g.sourceTexture != 0 &&
-                                     g.newSourceFrameCount != 0;
-            content = projectionProof || !sourceReady
-                    ? RenderContent::StereoDiagnostic
-                    : RenderContent::SourceTexture;
-            if (!projectionProof && !sourceReady &&
-                    (g.begunFrameCount <= STARTUP_DETAILED_FRAME_COUNT ||
-                     g.begunFrameCount % PERIODIC_DETAILED_FRAME_INTERVAL == 0)) {
-                LOGW("Source bridge not ready after diagnostic phases: blitReady=%d texture=%u "
-                     "latchCalls=%u newFrames=%u; retaining red/blue projection proof",
-                     g.sourceBlitReady ? 1 : 0, g.sourceTexture, g.sourceFrameLatchCalls,
-                     g.newSourceFrameCount);
-            }
-
+        } else if (projectionProof) {
+            content = RenderContent::StereoDiagnostic;
             const uint32_t compositionViewCount =
                     static_cast<uint32_t>(g.swapchains.size());
             layerViews.assign(compositionViewCount,
@@ -1697,14 +1778,7 @@ Java_paulscode_android_mupen64plusae_questvr_QuestVrBridge_nativeRenderFrame(
 
                 Swapchain& swapchain = g.swapchains[eye];
                 XrCompositionLayerProjectionView& view = layerViews[eye];
-                const bool useSourceView = content == RenderContent::SourceTexture &&
-                                           validPose && g.stereoSourceActive &&
-                                           g.sourceViewsValid && eye < 2;
-                const uint32_t sourceEye = g.configurationSwapEyes && eye < 2
-                        ? 1U - eye : eye;
-                const XrView& renderedView = useSourceView
-                        ? g.sourceViews[sourceEye]
-                        : (validPose ? g.views[eye] : fallbackViews[eye]);
+                const XrView& renderedView = validPose ? g.views[eye] : fallbackViews[eye];
                 view.pose = renderedView.pose;
                 view.fov = renderedView.fov;
                 view.subImage.swapchain = swapchain.handle;
@@ -1733,6 +1807,74 @@ Java_paulscode_android_mupen64plusae_questvr_QuestVrBridge_nativeRenderFrame(
                 layers[0] = reinterpret_cast<const XrCompositionLayerBaseHeader*>(
                         &projectionLayer);
                 layerCount = 1;
+            }
+        } else {
+            const bool sourceReady = g.sourceBlitReady && g.sourceTexture != 0 &&
+                                     g.newSourceFrameCount != 0;
+            content = RenderContent::SourceTexture;
+            if (!sourceReady &&
+                    (g.begunFrameCount <= STARTUP_DETAILED_FRAME_COUNT ||
+                     g.begunFrameCount % PERIODIC_DETAILED_FRAME_INTERVAL == 0)) {
+                LOGW("World-locked screen waiting for emulator source: blitReady=%d texture=%u "
+                     "latchCalls=%u newFrames=%u; submitting a black game quad",
+                     g.sourceBlitReady ? 1 : 0, g.sourceTexture, g.sourceFrameLatchCalls,
+                     g.newSourceFrameCount);
+            }
+
+            XrPosef screenPose = g.screenPose;
+            if (!g.screenPoseValid) {
+                setIdentity(screenPose);
+                screenPose.position.z = -g.configurationScreenDistanceMeters;
+            }
+            const float contentAspect = std::clamp(g.sourceContentAspect, 0.5f, 3.0f);
+            // At the default 2 m distance this 2.4 m width covers about 62 degrees, roughly
+            // one quarter smaller than the former full projection-eye presentation.
+            const float screenWidthMeters = 2.4f * g.configurationScreenScale;
+            const float screenHeightMeters = screenWidthMeters / contentAspect;
+            const bool stereoQuads = sourceReady && g.stereoSourceActive;
+            const uint32_t quadCount = stereoQuads ? 2U : 1U;
+            bool rendered = true;
+            for (uint32_t layerIndex = 0; layerIndex < quadCount; ++layerIndex) {
+                const uint32_t eye = stereoQuads ? layerIndex : 0U;
+                if (!acquireRenderRelease(eye, content)) {
+                    rendered = false;
+                    break;
+                }
+
+                const Swapchain& swapchain = g.swapchains[eye];
+                XrCompositionLayerQuad& quad = gameQuads[layerIndex];
+                quad.layerFlags = 0;
+                quad.space = g.localSpace;
+                quad.eyeVisibility = stereoQuads
+                        ? (eye == 0 ? XR_EYE_VISIBILITY_LEFT : XR_EYE_VISIBILITY_RIGHT)
+                        : XR_EYE_VISIBILITY_BOTH;
+                quad.subImage.swapchain = swapchain.handle;
+                quad.subImage.imageRect.offset = {0, 0};
+                quad.subImage.imageRect.extent = {swapchain.width, swapchain.height};
+                quad.subImage.imageArrayIndex = 0;
+                quad.pose = screenPose;
+                quad.size = {screenWidthMeters, screenHeightMeters};
+                layers[layerIndex] = reinterpret_cast<const XrCompositionLayerBaseHeader*>(
+                        &quad);
+
+                if (shouldLogDetailedFrame()) {
+                    LOGI("frame=%u gameQuad=%u eyeVisibility=%s space=LOCAL swapchain=%p "
+                         "rect=[0,0 %dx%d] array=0 size=%.3fx%.3fm aspect=%.4f "
+                         "pose=[q %.4f %.4f %.4f %.4f, p %.4f %.4f %.4f] "
+                         "source=%dx%d ready=%d stereo=%d",
+                         g.begunFrameCount, layerIndex,
+                         stereoQuads ? (eye == 0 ? "LEFT" : "RIGHT") : "BOTH",
+                         reinterpret_cast<void*>(swapchain.handle), swapchain.width,
+                         swapchain.height, screenWidthMeters, screenHeightMeters,
+                         contentAspect, screenPose.orientation.x, screenPose.orientation.y,
+                         screenPose.orientation.z, screenPose.orientation.w,
+                         screenPose.position.x, screenPose.position.y, screenPose.position.z,
+                         g.sourceWidth, g.sourceHeight, sourceReady ? 1 : 0,
+                         stereoQuads ? 1 : 0);
+                }
+            }
+            if (rendered) {
+                layerCount = quadCount;
             }
         }
     } else {
@@ -1776,11 +1918,18 @@ Java_paulscode_android_mupen64plusae_questvr_QuestVrBridge_nativeRenderFrame(
         if (isSessionVisible()) {
             ++g.visibleLayerSubmissionCount;
             if (g.visibleLayerSubmissionCount == 1) {
-                LOGI("First VISIBLE OpenXR layer submitted: bright green head-locked quad");
-            } else if (g.visibleLayerSubmissionCount == STARTUP_QUAD_VISIBLE_LAYER_COUNT) {
+                if (g.configurationStartupProofLayers) {
+                    LOGI("First VISIBLE OpenXR layer submitted: debug green head-locked quad");
+                } else {
+                    LOGI("First VISIBLE OpenXR layer submitted: LOCAL-space game screen "
+                         "(proof layers disabled)");
+                }
+            } else if (g.configurationStartupProofLayers &&
+                    g.visibleLayerSubmissionCount == STARTUP_QUAD_VISIBLE_LAYER_COUNT) {
                 LOGI("Green head-locked proof complete after %u visible layers; next frame starts "
                      "red/blue projection proof", g.visibleLayerSubmissionCount);
-            } else if (g.visibleLayerSubmissionCount == STARTUP_QUAD_VISIBLE_LAYER_COUNT +
+            } else if (g.configurationStartupProofLayers &&
+                    g.visibleLayerSubmissionCount == STARTUP_QUAD_VISIBLE_LAYER_COUNT +
                     STARTUP_PROJECTION_VISIBLE_LAYER_COUNT) {
                 LOGI("Projection proof complete after %u visible layers; next frame uses the "
                      "emulator SurfaceTexture when ready", g.visibleLayerSubmissionCount);
@@ -1802,16 +1951,20 @@ Java_paulscode_android_mupen64plusae_questvr_QuestVrBridge_nativeRenderFrame(
         LOGI("periodic status samples=%u submitted=%u layers=%u visibleLayers=%u state=%s "
              "avgWait=%.2fms "
              "avgNative=%.2fms avgWork=%.2fms maxWork=%.2fms "
-             "source=%dx%d stereo=%d swapEyes=%d eye=%dx%d sourcePoseAge=%.2fms "
+             "source=%dx%d contentAspect=%.4f stereo=%d swapEyes=%d eye=%dx%d "
+             "screenScale=%.3f screenDistance=%.3fm screenAnchorValid=%d "
+             "proofLayers=%d sourcePoseAge=%.2fms "
              "poseMatches=%u poseMisses=%u textureTs=%lld latchCalls=%u newSourceFrames=%u "
              "sourceBlitReady=%d",
              g.timingSampleCount, g.submittedFrameCount, g.renderedLayerFrameCount,
              g.visibleLayerSubmissionCount, sessionStateName(g.sessionState),
              g.waitFrameMilliseconds / divisor, g.nativeFrameMilliseconds / divisor,
              g.workMilliseconds / divisor, g.maximumWorkMilliseconds,
-             g.sourceWidth, g.sourceHeight,
+             g.sourceWidth, g.sourceHeight, g.sourceContentAspect,
              g.stereoSourceActive ? 1 : 0, g.configurationSwapEyes ? 1 : 0,
-             eyeWidth, eyeHeight,
+             eyeWidth, eyeHeight, g.configurationScreenScale,
+             g.configurationScreenDistanceMeters, g.screenPoseValid ? 1 : 0,
+             g.configurationStartupProofLayers ? 1 : 0,
              sourcePoseAgeMilliseconds, g.sourcePoseMatches, g.sourcePoseMisses,
              static_cast<long long>(g.sourceTextureTimestamp), g.sourceFrameLatchCalls,
              g.newSourceFrameCount, g.sourceBlitReady ? 1 : 0);

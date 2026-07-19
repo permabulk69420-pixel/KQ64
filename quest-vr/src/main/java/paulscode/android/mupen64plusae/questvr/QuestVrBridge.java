@@ -146,15 +146,16 @@ public final class QuestVrBridge {
         return true;
     }
 
-    public static void setSourceTexture(int texture, int width, int height, boolean requestStereo) {
+    public static void setSourceTexture(int texture, int width, int height, boolean requestStereo,
+            float contentAspect) {
         if (sLibraryLoaded) {
             if (texture != 0 && !sSourceTextureLogged) {
                 QuestVrDiagnostics.info(TAG, "Handing emulator source texture " + texture +
                         " (" + width + "x" + height + ", stereo=" + requestStereo +
-                        ") to OpenXR");
+                        ", contentAspect=" + contentAspect + ") to OpenXR");
                 sSourceTextureLogged = true;
             }
-            nativeSetSourceTexture(texture, width, height, requestStereo);
+            nativeSetSourceTexture(texture, width, height, requestStereo, contentAspect);
         }
     }
 
@@ -166,7 +167,14 @@ public final class QuestVrBridge {
 
     public static void configure(QuestVrSettings.Configuration configuration) {
         if (sLibraryLoaded) {
+            QuestVrDiagnostics.info(TAG, "Effective presentation screenScale=" +
+                    configuration.screenScale + " screenDistance=" +
+                    configuration.screenDistanceMeters + "m startupProofLayers=" +
+                    configuration.startupProofLayers + " stereo=" +
+                    configuration.stereoEnabled);
             nativeConfigure(configuration.stereoEnabled, configuration.swapEyes, configuration.ipdMeters,
+                    configuration.screenScale, configuration.screenDistanceMeters,
+                    configuration.startupProofLayers,
                     configuration.worldUnitsPerMeter, configuration.rotationStrength,
                     configuration.positionEnabled, configuration.maxTranslationMeters,
                     configuration.cameraOffsetXMeters, configuration.cameraOffsetYMeters,
@@ -217,9 +225,11 @@ public final class QuestVrBridge {
     private static native boolean nativeParkEglContext();
     private static native boolean nativeReleaseParkedEglContext();
     private static native boolean nativeInitialize(Activity activity);
-    private static native void nativeSetSourceTexture(int texture, int width, int height, boolean requestStereo);
+    private static native void nativeSetSourceTexture(int texture, int width, int height,
+            boolean requestStereo, float contentAspect);
     private static native void nativeOnSourceFrameLatched(long textureTimestampNanos);
     private static native void nativeConfigure(boolean stereoEnabled, boolean swapEyes, float ipdMeters,
+            float screenScale, float screenDistanceMeters, boolean startupProofLayers,
             float worldUnitsPerMeter, float rotationStrength, boolean positionEnabled,
             float maxTranslationMeters, float cameraOffsetXMeters, float cameraOffsetYMeters,
             float cameraOffsetZMeters, boolean useOpenXrFov, boolean marioKartProfileEnabled,

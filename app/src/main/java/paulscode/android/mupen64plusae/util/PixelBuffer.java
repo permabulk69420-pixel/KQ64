@@ -32,6 +32,8 @@ import static javax.microedition.khronos.egl.EGL10.EGL_WIDTH;
 import static javax.microedition.khronos.opengles.GL10.GL_RGBA;
 import static javax.microedition.khronos.opengles.GL10.GL_UNSIGNED_BYTE;
 
+import paulscode.android.mupen64plusae.questvr.QuestVrDiagnostics;
+
 @SuppressWarnings({"unused", "RedundantSuppression"})
 public class PixelBuffer {
     final static String TAG = "PixelBuffer";
@@ -70,6 +72,9 @@ public class PixelBuffer {
     public PixelBuffer(int width, int height) {
         mWidth = width;
         mHeight = height;
+        QuestVrDiagnostics.info(TAG, "Producer EGL allocation requested=" + width + "x" +
+                height + " pixels=" + ((long) width * height) + " tid=" +
+                Thread.currentThread().getId());
 
         int[] version = new int[2];
         int[] attribList = new int[] {
@@ -81,10 +86,22 @@ public class PixelBuffer {
         // No error checking performed, minimum required code to elucidate logic
         mEGL = (EGL10) EGLContext.getEGL();
         mEGLDisplay = mEGL.eglGetDisplay(EGL_DEFAULT_DISPLAY);
-        mEGL.eglInitialize(mEGLDisplay, version);
+        final boolean initialized = mEGLDisplay != EGL10.EGL_NO_DISPLAY &&
+                mEGL.eglInitialize(mEGLDisplay, version);
+        QuestVrDiagnostics.info(TAG, "Producer EGL display=" + mEGLDisplay +
+                " initialized=" + initialized + " version=" + version[0] + "." +
+                version[1] + " error=0x" + Integer.toHexString(mEGL.eglGetError()));
+        if (!initialized) {
+            return;
+        }
         mEGLConfig = chooseConfig(); // Choosing a config is a little more complicated
 
         if (mEGLConfig != null) {
+            QuestVrDiagnostics.info(TAG, "Producer EGL config=" + mEGLConfig +
+                    " maxPbuffer=" + getConfigAttrib(mEGLConfig, EGL10.EGL_MAX_PBUFFER_WIDTH) +
+                    "x" + getConfigAttrib(mEGLConfig, EGL10.EGL_MAX_PBUFFER_HEIGHT) +
+                    " maxPixels=" + getConfigAttrib(mEGLConfig,
+                    EGL10.EGL_MAX_PBUFFER_PIXELS));
 
             final int[] contextAttrs = new int[]{
                     EGL_CONTEXT_CLIENT_VERSION,
@@ -93,7 +110,16 @@ public class PixelBuffer {
 
             mEGLContext = mEGL.eglCreateContext(mEGLDisplay, mEGLConfig, EGL_NO_CONTEXT, contextAttrs);
             mEGLSurface = mEGL.eglCreatePbufferSurface(mEGLDisplay, mEGLConfig, attribList);
-            mEGL.eglMakeCurrent(mEGLDisplay, mEGLSurface, mEGLSurface, mEGLContext);
+            final boolean current = mEGLContext != EGL_NO_CONTEXT &&
+                    mEGLSurface != EGL_NO_SURFACE &&
+                    mEGL.eglMakeCurrent(mEGLDisplay, mEGLSurface, mEGLSurface, mEGLContext);
+            QuestVrDiagnostics.info(TAG, "Producer EGL context=" + mEGLContext +
+                    " pbuffer=" + mEGLSurface + " current=" + current + " requested=" +
+                    width + "x" + height + " error=0x" +
+                    Integer.toHexString(mEGL.eglGetError()));
+            if (!current) {
+                return;
+            }
             mGL = (GL10) mEGLContext.getGL();
 
             int[] textures = new int[1];
@@ -105,6 +131,12 @@ public class PixelBuffer {
             GLES20.glTexParameteri(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, GLES20.GL_TEXTURE_WRAP_T, GLES20.GL_CLAMP_TO_EDGE);
             mSurfaceTexture = new SurfaceTextureWithSize(new SurfaceTexture(textures[0]), mWidth, mHeight);
             mSurface = new Surface(mSurfaceTexture.mSurfaceTexture);
+            QuestVrDiagnostics.info(TAG, "Producer SurfaceTexture created texture=" +
+                    textures[0] + " defaultBuffer=" + mWidth + "x" + mHeight +
+                    " glError=0x" + Integer.toHexString(GLES20.glGetError()));
+        } else {
+            QuestVrDiagnostics.error(TAG, "No EGL config for producer " + width + "x" +
+                    height, null);
         }
 
         // Record thread owner of OpenGL context
@@ -113,7 +145,9 @@ public class PixelBuffer {
 
     public void releaseSurfaceTexture()
     {
-        mSurfaceTexture.mSurfaceTexture.release();
+        if (mSurfaceTexture != null) {
+            mSurfaceTexture.mSurfaceTexture.release();
+        }
     }
 
     public void destroyGlContext()

@@ -66,6 +66,7 @@ import paulscode.android.mupen64plusae.game.GameDataManager;
 import paulscode.android.mupen64plusae.persistent.AppData;
 import paulscode.android.mupen64plusae.persistent.GamePrefs;
 import paulscode.android.mupen64plusae.persistent.GlobalPrefs;
+import paulscode.android.mupen64plusae.questvr.QuestVrDiagnostics;
 import paulscode.android.mupen64plusae.util.CountryCode;
 import paulscode.android.mupen64plusae.util.FileUtil;
 import paulscode.android.mupen64plusae.util.PixelBuffer;
@@ -1069,8 +1070,21 @@ public class CoreService extends Service implements CoreInterface.OnFpsChangedLi
             // This must happen here instead of OnCreate because we only find out the rendering
             // resolution here.
             if (mPixelBuffer == null) {
+                QuestVrDiagnostics.info(TAG, "Creating GLideN64 producer PixelBuffer requested=" +
+                        mVideoRenderWidth + "x" + mVideoRenderHeight + " pixels=" +
+                        ((long) mVideoRenderWidth * mVideoRenderHeight));
                 mPixelBuffer = new PixelBuffer(mVideoRenderWidth, mVideoRenderHeight);
-                setSurface(mPixelBuffer.getSurface());
+                final PixelBuffer.SurfaceTextureWithSize producer =
+                        mPixelBuffer.getSurfaceTexture();
+                if (producer != null && mPixelBuffer.getSurface() != null) {
+                    QuestVrDiagnostics.info(TAG, "GLideN64 producer created actual=" +
+                            producer.mWidth + "x" + producer.mHeight + " surface=" +
+                            mPixelBuffer.getSurface());
+                    setSurface(mPixelBuffer.getSurface());
+                } else {
+                    QuestVrDiagnostics.error(TAG, "GLideN64 producer creation failed for " +
+                            mVideoRenderWidth + "x" + mVideoRenderHeight, null);
+                }
                 mPixelBuffer.destroyGlContext();
             }
 

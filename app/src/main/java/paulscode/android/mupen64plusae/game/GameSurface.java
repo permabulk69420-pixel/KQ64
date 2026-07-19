@@ -974,9 +974,20 @@ public class GameSurface extends SurfaceView implements SurfaceHolder.Callback
 
             mShaderDrawer.onSurfaceTextureAvailable(surfaceTexture, width, height);
             if (mQuestVrActive) {
+                final boolean stereo = mQuestVrConfiguration.stereoEnabled;
+                final float bufferAspect = surfaceTexture.mHeight > 0
+                        ? surfaceTexture.mWidth / (float) surfaceTexture.mHeight : 4.0f / 3.0f;
+                final float contentAspect = stereo
+                        ? bufferAspect / mQuestVrConfiguration.stereoSourceWidthScale
+                        : bufferAspect;
+                QuestVrDiagnostics.info(TAG, "OpenXR source handoff actualProducer=" +
+                        surfaceTexture.mWidth + "x" + surfaceTexture.mHeight +
+                        " consumerRequest=" + width + "x" + height + " stereo=" + stereo +
+                        " widthScale=" + mQuestVrConfiguration.stereoSourceWidthScale +
+                        " contentAspect=" + contentAspect);
                 QuestVrBridge.setSourceTexture(mShaderDrawer.getSourceTextureId(),
                         surfaceTexture.mWidth, surfaceTexture.mHeight,
-                        mQuestVrConfiguration.stereoEnabled);
+                        stereo, contentAspect);
             }
 
             // Draw a single frame to prevent a black screen on rotation while game is paused
@@ -1060,7 +1071,7 @@ public class GameSurface extends SurfaceView implements SurfaceHolder.Callback
                 Choreographer.getInstance().removeFrameCallback(this);
             }
             if (mQuestVrActive) {
-                QuestVrBridge.setSourceTexture(0, 0, 0, false);
+                QuestVrBridge.setSourceTexture(0, 0, 0, false, 4.0f / 3.0f);
             }
             mShaderDrawer.onSurfaceTextureDestroyed();
         }

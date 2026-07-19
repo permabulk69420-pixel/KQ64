@@ -1,5 +1,45 @@
 # PPSSPP/OpenXR divergence audit
 
+## Quest device follow-up: usable presentation iteration
+
+A Quest hardware run has now confirmed that the audited startup path enters OpenXR, submits the
+GLideN64 SurfaceTexture, preserves per-eye stereo, and maps Touch controllers successfully. The
+next presentation iteration keeps that proven loader/session/input path and changes only how the
+game image is presented:
+
+- Normal launches no longer spend 360 visible frames on the green quad and another 360 on the
+  red/blue projection proof. Those phases remain available through **Show startup proof layers**.
+- The game is submitted as two coincident `XrCompositionLayerQuad` layers in `LOCAL` space, with
+  `LEFT` and `RIGHT` eye visibility respectively. This preserves the existing side-by-side stereo
+  source while making the screen world-locked rather than filling each projection eye.
+- Default screen width is 2.4 metres at a 2.0 metre anchor distance (about 62 degrees wide). Screen
+  size and distance are clamped, cross Java/JNI, and are recorded in the persistent report.
+- Recenter now requests both the GLideN64 pose origin and a new LOCAL-space screen anchor in front
+  of the current headset pose.
+- Producer requests are resolved before core startup and are proportionally capped at 2688 pixels
+  wide, 1440 pixels high, and 3,000,000 pixels. The 2688 limit deliberately stays below the
+  device-observed failure at the 2880-wide preset. The exact base, requested, clamped, EGL pbuffer,
+  SurfaceTexture, and OpenXR consumer sizes are logged.
+
+The source-resolution width multiplier changes the actual GLideN64 render target and
+`SurfaceTexture`, not the physical cinema-screen size. A value of 1 is the conservative default;
+2 requests the flat renderer's horizontal resolution in each side-by-side eye before the safety
+limits are applied.
+
+### Head tracking scope
+
+Screen tracking and in-game tracking are separate:
+
+- The compositor keeps the cinema screen fixed in `LOCAL` space. Looking away therefore moves the
+  screen naturally out of view; changing screen distance/scale does not rewrite game geometry.
+- Each valid `xrLocateViews` result is also published to GLideN64. For perspective world draws,
+  GLideN64 applies per-eye position/FOV and a recentered headset-orientation transform late in its
+  vertex path. Orthographic HUD/background draws are intentionally left alone.
+- This is real per-eye rotational geometry work, but not a universal N64 camera integration.
+  Game-specific camera constraints and CPU-side visibility/culling can still limit useful
+  look-around. Positional tracking remains opt-in and bounded. No broad camera or culling rewrite
+  is part of this iteration.
+
 ## Scope and conclusion
 
 This audit compares Mupen64Plus AE at
@@ -21,10 +61,9 @@ find four N64-specific dependencies capable of hiding every layer even when emul
 4. A transient Android `onStop` kept the OpenXR thread but paused the emulator producer, making the
    retained SurfaceTexture bridge unable to prove that it was receiving new frames.
 
-The changes on `ppsspp-openxr-audit` isolate those dependencies. The first visible phase is now a
-bright green, head-locked core quad layer that needs neither tracking nor SurfaceTexture. It is
-followed by red/blue projection layers, and only then by the emulator texture. No headset success is
-claimed until this sequence is tested on Quest hardware.
+The original audit changes isolated those dependencies with timed green and red/blue proofs. Quest
+hardware subsequently confirmed the full path through the emulator texture. Those proofs are now
+debug-gated, and normal launches go directly to the world-locked game screen.
 
 ## Call-by-call comparison
 
@@ -46,7 +85,7 @@ claimed until this sequence is tested on Quest hardware.
 | Acquire/wait/release | Acquires, waits, renders directly, and releases before composition. | Same order, but blits an external-OES texture into the acquired image. | Core order is correct. N64 now bounds logging, validates image indices, and does not release an image after a failed wait. |
 | Poses/FOV | Projection mode uses located poses and FOV; flat modes commonly use a cylinder layer. | Projection uses located poses/FOV, with conservative VIEW-space fallback values when tracking validity is absent. | Both are valid. Exact submitted poses/FOV/space are now recorded during startup samples. |
 | Image rectangles | Uses valid swapchain extents, array index 0; SBS modes adjust rectangles. | Uses the full per-eye extent and array index 0. | Equivalent for separate per-eye swapchains. All fields are logged. |
-| Composition layers | Builds projection/cylinder layers from images PPSSPP rendered directly. | Built projection layers only; diagnostics were coupled to the external shader and tracking path. | High-value divergence. N64 now submits a VIEW-space quad first, projection diagnostics second, then source projection. |
+| Composition layers | Builds projection/cylinder layers from images PPSSPP rendered directly. | Originally built projection layers only; diagnostics were coupled to the external shader and tracking path. | N64 now uses paired eye-visible LOCAL-space game quads. VIEW-space green and projection red/blue proofs are available only through an explicit debug preference. |
 | `xrEndFrame` | Submits pointers to layer storage that remains alive through the call, OPAQUE blend mode. | Local layer/view storage remains alive through the call, OPAQUE hard-coded. | Lifetime is safe in both. N64 enumerates OPAQUE support and logs input layer count/pointer/result. |
 | Teardown/re-entry | Ends on STOPPING and destroys session/space objects on leave. | Ends on STOPPING; retains session/context across transient focus/surface changes; destroys resources before EGL on final shutdown. | Valid architecture. Every destroy/exit result is now logged, and final surface loss no longer takes the transient-retain branch. |
 | Threads | PPSSPP can register main/renderer thread IDs through optional Android extensions. | All session and frame calls occur on the consumer render thread; Android lifecycle and GLideN64 producer use other threads. | No required extension is missing for the core path. Durable logs identify every Java/native thread so a device run can confirm ownership. |
@@ -105,7 +144,7 @@ external-OES texture in the same consumer EGL context bound to the OpenXR sessio
 than PPSSPP's direct-render path: producer swaps, callbacks, latching, shader extension support, and
 context retention must all succeed independently.
 
-The staged layers now distinguish those failures:
+When **Show startup proof layers** is enabled, the staged layers distinguish those failures:
 
 - Green quad visible: loader, instance, system, session, VIEW space, swapchain, GLES FBO, frame
   pacing, and core composition are working.
@@ -124,20 +163,22 @@ contains lifecycle, surface, EGL binding/config, all initialization calls/result
 the first 16 frame submissions, 300-frame status samples, swapchain operations, layer inputs, and
 SurfaceTexture producer/latch counters.
 
-Quest test:
+Quest test for the current normal presentation:
 
 1. Install the audit APK without uninstalling if existing ROM/profile data should be retained.
 2. In **Gallery drawer → Display → Quest VR prototype**, leave **Enable Quest VR** and periodic
-   diagnostics enabled.
+   diagnostics enabled, and leave **Show startup proof layers** off.
 3. Launch one known-good GLideN64 game and keep the headset on for at least **30 seconds**.
-4. Record whether the view shows (a) a bright green head-locked panel for about five seconds,
-   (b) red in the left eye and blue in the right for about five seconds, and (c) the emulator image
-   or continuing red/blue afterward. Also record whether game audio continues.
+4. Confirm that the game appears directly on a screen fixed in the room, without green or red/blue
+   startup phases. Turn your head far enough that the screen moves toward the edge of view; then use
+   **Recenter Quest VR view** (or the two-stick-click chord) and confirm that it is placed in front
+   again. Also confirm stereo and Touch input remain intact.
 5. Exit the game normally. Return to **Gallery drawer → Display → Quest VR prototype → Export latest
    VR diagnostic**, then share/save the `.log` file.
 
 If no layer appears, do not infer failure from audio or compilation. The diagnostic report should
-be checked for `xrBeginSession`, transition to `VISIBLE`/`FOCUSED`, the first successful
-`xrEndFrame layerCount=1`, and an unchanged EGL display/context. If green and red/blue appear but the
-emulator does not, check `GLideN64 SurfaceTexture callback`, `newLatchedFrames`, and native
-`newSourceFrames` before changing OpenXR lifecycle code.
+be checked for `xrBeginSession`, transition to `VISIBLE`/`FOCUSED`, a successful `xrEndFrame` with
+one monoscopic or two stereo quad layers, and an unchanged EGL display/context. Check the logged
+base/requested/effective producer resolution, `Producer EGL context`, `actualProducer`,
+`GLideN64 SurfaceTexture callback`, `newLatchedFrames`, and native `newSourceFrames` before changing
+OpenXR lifecycle code.
