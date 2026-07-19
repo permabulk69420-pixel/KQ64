@@ -1,0 +1,37 @@
+name: Apply Quest VR packed-target fix
+
+on:
+  push:
+    branches:
+      - ppsspp-openxr-audit
+    paths:
+      - tools/quest-vr-packed-target-fix.patch
+      - .github/workflows/apply-quest-vr-packed-target-fix.yml
+
+permissions:
+  contents: write
+
+jobs:
+  apply-patch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out audit branch
+        uses: actions/checkout@v4
+        with:
+          ref: ppsspp-openxr-audit
+          fetch-depth: 0
+
+      - name: Apply packed-target patch
+        run: |
+          git apply --check tools/quest-vr-packed-target-fix.patch
+          git apply tools/quest-vr-packed-target-fix.patch
+          rm tools/quest-vr-packed-target-fix.patch
+          rm .github/workflows/apply-quest-vr-packed-target-fix.yml
+
+      - name: Commit renderer fix
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "Fix Quest packed framebuffer coordinate mapping"
+          git push origin HEAD:ppsspp-openxr-audit
