@@ -37,7 +37,7 @@ jobs:
       - name: Check packed-target patch
         id: patch-check
         continue-on-error: true
-        run: git apply --check --verbose tools/quest-vr-packed-target-fix.patch > patch-check.txt 2>&1
+        run: git apply --recount --check --verbose tools/quest-vr-packed-target-fix.patch > patch-check.txt 2>&1
 
       - name: Upload patch rejection
         if: steps.patch-check.outcome == 'failure'
@@ -55,7 +55,7 @@ jobs:
       - name: Apply packed-target patch
         if: steps.patch-check.outcome == 'success'
         run: |
-          git apply tools/quest-vr-packed-target-fix.patch
+          git apply --recount tools/quest-vr-packed-target-fix.patch
           rm tools/quest-vr-packed-target-fix.patch
           rm .github/workflows/apply-quest-vr-packed-target-fix.yml
 
