@@ -32,6 +32,7 @@ jobs:
         with:
           ref: ppsspp-openxr-audit
           fetch-depth: 1
+          show-progress: false
 
       - name: Apply packed-target patch
         run: |
