@@ -31,11 +31,11 @@ jobs:
         uses: actions/checkout@v4
         with:
           ref: ppsspp-openxr-audit
-          fetch-depth: 0
+          fetch-depth: 1
 
       - name: Apply packed-target patch
         run: |
-          git apply --check tools/quest-vr-packed-target-fix.patch
+          git apply --check --verbose tools/quest-vr-packed-target-fix.patch
           git apply tools/quest-vr-packed-target-fix.patch
           rm tools/quest-vr-packed-target-fix.patch
           rm .github/workflows/apply-quest-vr-packed-target-fix.yml
