@@ -1,5 +1,6 @@
 name: Apply Quest VR packed-target fix
 
+# One-shot source patch; this workflow deletes itself after committing the fix.
 on:
   push:
     branches:
