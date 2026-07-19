@@ -1,44 +1,80 @@
 # PPSSPP/OpenXR divergence audit
 
-## Quest device follow-up: usable presentation iteration
+## Quest 3S hardware follow-up: immersive/cinema split
 
-A Quest hardware run has now confirmed that the audited startup path enters OpenXR, submits the
-GLideN64 SurfaceTexture, preserves per-eye stereo, and maps Touch controllers successfully. The
-next presentation iteration keeps that proven loader/session/input path and changes only how the
-game image is presented:
+`quest-vr-diagnostic-latest.log` at branch commit
+`3ec5223f063bd96250faffdcfb8b40eb386ebbc1` is a real Quest 3S run of
+`32fe4ae98d4a813debfedb648aecc5038ea011cb`. It confirms that the fragile parts of the bridge are
+not the current blocker: the session reached `FOCUSED`, 6,000 frames reached successful
+`xrEndFrame`, the external texture kept receiving new frames, 2,240 source poses matched with only
+two misses, runtime IPD was about 63 mm, and Touch input remained usable.
 
-- Normal launches no longer spend 360 visible frames on the green quad and another 360 on the
-  red/blue projection proof. Those phases remain available through **Show startup proof layers**.
-- The game is submitted as two coincident `XrCompositionLayerQuad` layers in `LOCAL` space, with
-  `LEFT` and `RIGHT` eye visibility respectively. This preserves the existing side-by-side stereo
-  source while making the screen world-locked rather than filling each projection eye.
-- Default screen width is 2.4 metres at a 2.0 metre anchor distance (about 62 degrees wide). Screen
-  size and distance are clamped, cross Java/JNI, and are recorded in the persistent report.
-- Recenter now requests both the GLideN64 pose origin and a new LOCAL-space screen anchor in front
-  of the current headset pose.
-- Producer requests are resolved before core startup and are proportionally capped at 2688 pixels
-  wide, 1440 pixels high, and 3,000,000 pixels. The 2688 limit deliberately stays below the
-  device-observed failure at the 2880-wide preset. The exact base, requested, clamped, EGL pbuffer,
-  SurfaceTexture, and OpenXR consumer sizes are logged.
+The same report also proves two presentation defects:
 
-The source-resolution width multiplier changes the actual GLideN64 render target and
-`SurfaceTexture`, not the physical cinema-screen size. A value of 1 is the conservative default;
-2 requests the flat renderer's horizontal resolution in each side-by-side eye before the safety
-limits are applied.
+- Every normal game frame was submitted as two `LOCAL`-space quads. No user setting selected a
+  native projection layer.
+- The selected 2880x2160 render preset and legacy multiplier 1.0 became a 1920x1440 complete SBS
+  source. Each eye therefore received only 960x1440 and was stretched back to a 4:3 screen.
 
-### Head tracking scope
+This iteration leaves the proven OpenXR/EGL/SurfaceTexture/input lifecycle intact and introduces
+two explicit native modes:
 
-Screen tracking and in-game tracking are separate:
+- **Immersive projection** submits one `XrCompositionLayerProjection` containing two projection
+  views. Each view uses the pose and FOV recorded for the latched GLideN64 source frame whenever
+  the exact pose-history match is available. Using that old pose as composition metadata is not a
+  second game-camera rotation: it tells the compositor which view generated the texture so normal
+  reprojection can move it from the source pose to display time. Current/fallback views are used
+  only when a source match is unavailable.
+- **World-locked cinema screen** preserves the known-working paired `LEFT`/`RIGHT`
+  `XrCompositionLayerQuad` layers in `LOCAL` space. Screen size, distance, and recenter behavior
+  remain cinema-only controls.
 
-- The compositor keeps the cinema screen fixed in `LOCAL` space. Looking away therefore moves the
-  screen naturally out of view; changing screen distance/scale does not rewrite game geometry.
-- Each valid `xrLocateViews` result is also published to GLideN64. For perspective world draws,
-  GLideN64 applies per-eye position/FOV and a recentered headset-orientation transform late in its
-  vertex path. Orthographic HUD/background draws are intentionally left alone.
-- This is real per-eye rotational geometry work, but not a universal N64 camera integration.
-  Game-specific camera constraints and CPU-side visibility/culling can still limit useful
-  look-around. Positional tracking remains opt-in and bounded. No broad camera or culling rewrite
-  is part of this iteration.
+The immersive source is aspect-fitted into each near-square Quest eye image, then multiplied by a
+clamped 0.5-1.0 immersive scale. Default 1.0 shows the complete 4:3 eye source without the previous
+stretch/crop. Startup green and red/blue proofs remain debug-only.
+
+### Corrected stereo-resolution semantics
+
+The selected flat render size is now treated as desired **per-eye** content. The versioned source
+multiplier defaults to 2.0 and scales both axes together:
+
+`requested total SBS = (selected width × multiplier, selected height × multiplier / 2)`
+
+At 2.0 this requests two full selected-width eyes and one selected-height row. Proportional safety
+limits remain 2688 total pixels wide, 1440 high, and 3,000,000 pixels. Thus 2880x2160 at 2.0 safely
+resolves to about 2688x1008 total, or 1344x1008 per eye, preserving 4:3. At the current width cap,
+1440x1080 and larger 4:3 presets converge on that same plateau; the persistent report explicitly
+labels width/height/pixel limiting and logs selected, requested total/per-eye, and effective
+total/per-eye sizes.
+
+### GLideN64 tracking-path audit
+
+World-locked screen tracking and in-game camera tracking remain separate. The late GLideN64 path
+now reports enough classifications to test the mixed Mario Kart result:
+
+| Renderer path | Stereo behavior | Head transform behavior |
+| --- | --- | --- |
+| Perspective triangles/lines | Drawn once per eye | Eligible for OpenXR FOV, eye offset, and recentered head transform |
+| Orthographic triangle batches | Drawn once per eye | Deliberately not transformed |
+| Texture rectangles and background rectangles | Drawn once per eye | Stable screen-space path; not transformed |
+| Sprite2D commands | Generally become texture rectangles | Stable screen-space path; not transformed |
+| 3D billboards | Remain triangle geometry | Transform with their world pass, but still face the original game camera |
+| Framebuffer copies/blits and final post-processing | Preserve left/right packed halves | Copy already-rendered pixels; cannot add missing camera motion |
+| Vertices with `MODIFY_XY` | Stereo draw still occurs | Shader deliberately skips the late clip transform for those premodified positions |
+
+The spinning Nintendo logo is therefore a strong result because it is a clean perspective mesh.
+Mario Kart track, vehicles, and scenery should also count as perspective batches when they use the
+normal 3D path, while menus/HUD/background rectangles should remain stable. The new counters split
+perspective, orthographic, rectangles, background rectangles, Sprite2D commands, blits, missing
+transform programs, total geometry vertices, and `MODIFY_XY` vertices. They will show whether
+apparently flat race content is truly bypassing
+the transform or simply has subtle motion. The transform still occurs after the N64 camera,
+projection, and most CPU-side culling; this change does not claim to be a universal N64 camera
+rewrite.
+
+Finally, Quest hardware established that user value +1.0 produced the direction previously reached
+with -1.0. The sign is now converted at the late clip-transform boundary. User-facing +1.0 follows
+the headset, while negative values remain an intentional inversion.
 
 ## Scope and conclusion
 
@@ -79,13 +115,13 @@ debug-gated, and normal launches go directly to the world-locked game screen.
 | Session timing | `VR_EnterVR` runs after a render context exists. | Session creation runs on `GameSurface.RenderThread` after the consumer EGL context is current and parked. | Valid if the parked binding remains current. The binding is now captured immediately before `xrCreateSession` and checked during frames. |
 | Android lifecycle | PPSSPP translates app/surface lifecycle into enter/leave/focus state while its producer and VR renderer share the main graphics path. | OpenXR survives the temporary Android Surface loss on a separate consumer thread. Previously `GameActivity.onStop` still paused the core producer. | Meaningful bridge-specific divergence. Transient hand-off now retains both OpenXR consumer and emulator producer; final exit still uses normal cleanup. |
 | Session events | `READY` calls `xrBeginSession`; `STOPPING` calls `xrEndSession`. | Same event-driven policy. | Equivalent. N64 now guards duplicate states, logs event session/time/state, and never calls `xrEndSession` outside `STOPPING`. |
-| Reference spaces | Creates VIEW and stage/fake-stage choices according to mode. | Creates LOCAL for tracked projection and VIEW for head-locked fallback. | Harmless. VIEW is also used for the independent green proof layer. |
+| Reference spaces | Creates VIEW and stage/fake-stage choices according to mode. | Creates LOCAL for projection/cinema and VIEW for head-locked fallback/proofs. | Harmless. Cinema anchors in LOCAL; immersive projection submits source/current LOCAL poses. |
 | Swapchains | Direct GLES render targets, one framebuffer path per eye/mode. | One recommended-size, single-sample GLES swapchain per eye. | Equivalent for the milestone. Formats, handles, sizes, image counts, and view recommendations are now recorded. |
 | Frame pacing | PPSSPP performs `xrWaitFrame`, `xrLocateViews`, then `xrBeginFrame`. | Performs `xrWaitFrame`, `xrBeginFrame`, then `xrLocateViews`. | Harmless: locating views is not required to be inside the begun-frame interval. N64 keeps its order and logs each milestone. |
 | Acquire/wait/release | Acquires, waits, renders directly, and releases before composition. | Same order, but blits an external-OES texture into the acquired image. | Core order is correct. N64 now bounds logging, validates image indices, and does not release an image after a failed wait. |
 | Poses/FOV | Projection mode uses located poses and FOV; flat modes commonly use a cylinder layer. | Projection uses located poses/FOV, with conservative VIEW-space fallback values when tracking validity is absent. | Both are valid. Exact submitted poses/FOV/space are now recorded during startup samples. |
 | Image rectangles | Uses valid swapchain extents, array index 0; SBS modes adjust rectangles. | Uses the full per-eye extent and array index 0. | Equivalent for separate per-eye swapchains. All fields are logged. |
-| Composition layers | Builds projection/cylinder layers from images PPSSPP rendered directly. | Originally built projection layers only; diagnostics were coupled to the external shader and tracking path. | N64 now uses paired eye-visible LOCAL-space game quads. VIEW-space green and projection red/blue proofs are available only through an explicit debug preference. |
+| Composition layers | Builds projection/cylinder layers from images PPSSPP rendered directly. | Consumes the external texture into two eye swapchains. | N64 now explicitly selects a source-pose-matched projection layer for immersive mode or paired eye-visible LOCAL quads for cinema. VIEW-space green and red/blue proofs are available only through a debug preference. |
 | `xrEndFrame` | Submits pointers to layer storage that remains alive through the call, OPAQUE blend mode. | Local layer/view storage remains alive through the call, OPAQUE hard-coded. | Lifetime is safe in both. N64 enumerates OPAQUE support and logs input layer count/pointer/result. |
 | Teardown/re-entry | Ends on STOPPING and destroys session/space objects on leave. | Ends on STOPPING; retains session/context across transient focus/surface changes; destroys resources before EGL on final shutdown. | Valid architecture. Every destroy/exit result is now logged, and final surface loss no longer takes the transient-retain branch. |
 | Threads | PPSSPP can register main/renderer thread IDs through optional Android extensions. | All session and frame calls occur on the consumer render thread; Android lifecycle and GLideN64 producer use other threads. | No required extension is missing for the core path. Durable logs identify every Java/native thread so a device run can confirm ownership. |
@@ -163,22 +199,31 @@ contains lifecycle, surface, EGL binding/config, all initialization calls/result
 the first 16 frame submissions, 300-frame status samples, swapchain operations, layer inputs, and
 SurfaceTexture producer/latch counters.
 
-Quest test for the current normal presentation:
+Quest test for this unverified presentation iteration:
 
-1. Install the audit APK without uninstalling if existing ROM/profile data should be retained.
-2. In **Gallery drawer → Display → Quest VR prototype**, leave **Enable Quest VR** and periodic
-   diagnostics enabled, and leave **Show startup proof layers** off.
-3. Launch one known-good GLideN64 game and keep the headset on for at least **30 seconds**.
-4. Confirm that the game appears directly on a screen fixed in the room, without green or red/blue
-   startup phases. Turn your head far enough that the screen moves toward the edge of view; then use
-   **Recenter Quest VR view** (or the two-stick-click chord) and confirm that it is placed in front
-   again. Also confirm stereo and Touch input remain intact.
-5. Exit the game normally. Return to **Gallery drawer → Display → Quest VR prototype → Export latest
-   VR diagnostic**, then share/save the `.log` file.
+1. Install over the existing APK so the ROM/profile remains available. In **Gallery drawer →
+   Display → Quest VR prototype**, keep **Enable Quest VR**, stereo, Touch, OpenXR FOV, and periodic
+   diagnostics enabled. Keep **Show startup proof layers** off and set head rotation to **+1.0**.
+2. Select **Immersive projection**, immersive scale **1.0**, and source multiplier **2.0**. Choose
+   the 960x720 preset first. Launch Mario Kart 64 and wear the headset for **45 seconds**: include
+   the Nintendo logo/menu flag, then at least 20 seconds in a race. Confirm no green/red-blue
+   startup, correct yaw/pitch direction, stereo on the logo, useful race tracking, and all Touch
+   controls. Recenter once with the existing action/chord.
+3. Exit normally and export the diagnostic immediately. It should report
+   `presentation=IMMERSIVE_PROJECTION`, one submitted layer containing two projection views,
+   `poseSource=MATCHED_SOURCE_FRAME` after startup, 1920x720 total / 960x720 per eye at the 960x720
+   preset, and the new draw classifications.
+4. Select **World-locked cinema screen**, relaunch for **30 seconds**, and confirm the known cinema
+   behavior remains: the screen stays fixed in LOCAL space, screen scale/distance work, recenter
+   places it in front, stereo remains visible, and Touch is unchanged. Export this second log if
+   cinema regresses.
+5. Return to immersive mode and test 1440x1080, 1920x1440, and 2880x2160 for **20 seconds each**.
+   The first high preset should reach the safe plateau and every larger 4:3 preset should clearly
+   log the same approximate 2688x1008 total / 1344x1008 per-eye result instead of hanging at a
+   diagnostic color. Export the final high-preset log.
 
-If no layer appears, do not infer failure from audio or compilation. The diagnostic report should
-be checked for `xrBeginSession`, transition to `VISIBLE`/`FOCUSED`, a successful `xrEndFrame` with
-one monoscopic or two stereo quad layers, and an unchanged EGL display/context. Check the logged
-base/requested/effective producer resolution, `Producer EGL context`, `actualProducer`,
-`GLideN64 SurfaceTexture callback`, `newLatchedFrames`, and native `newSourceFrames` before changing
-OpenXR lifecycle code.
+Do not infer success from audio or compilation. For any missing layer, check `xrBeginSession`,
+`VISIBLE`/`FOCUSED`, successful `xrEndFrame`, selected presentation mode, projection/quad layer
+details, unchanged EGL display/context, selected/requested/effective total and per-eye resolution,
+`actualProducer`, SurfaceTexture callbacks/latches, pose matches, and `newSourceFrames` before
+changing lifecycle code.
