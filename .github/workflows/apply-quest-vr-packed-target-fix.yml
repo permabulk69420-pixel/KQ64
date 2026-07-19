@@ -34,14 +34,33 @@ jobs:
           fetch-depth: 1
           show-progress: false
 
-      - name: Apply packed-target patch
+      - name: Check packed-target patch
+        id: patch-check
+        continue-on-error: true
+        run: git apply --check --verbose tools/quest-vr-packed-target-fix.patch > patch-check.txt 2>&1
+
+      - name: Upload patch rejection
+        if: steps.patch-check.outcome == 'failure'
+        uses: actions/upload-artifact@v4
+        with:
+          name: quest-vr-patch-check
+          path: patch-check.txt
+
+      - name: Stop after rejected patch
+        if: steps.patch-check.outcome == 'failure'
         run: |
-          git apply --check --verbose tools/quest-vr-packed-target-fix.patch
+          cat patch-check.txt
+          exit 1
+
+      - name: Apply packed-target patch
+        if: steps.patch-check.outcome == 'success'
+        run: |
           git apply tools/quest-vr-packed-target-fix.patch
           rm tools/quest-vr-packed-target-fix.patch
           rm .github/workflows/apply-quest-vr-packed-target-fix.yml
 
       - name: Commit renderer fix
+        if: steps.patch-check.outcome == 'success'
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
