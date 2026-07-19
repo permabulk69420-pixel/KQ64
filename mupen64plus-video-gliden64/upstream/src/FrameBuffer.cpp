@@ -88,7 +88,7 @@ void _initFrameBufferTexture(u32 _address, u16 _width, u16 _height, f32 _scale, 
 	_pTexture->hdRatioS = horizontalScale;
 	_pTexture->hdRatioT = _scale;
 	if (horizontalMultiplier > 1U)
-		QuestVr::markPackedFramebufferTexture(_pTexture->name);
+		QuestVr::markPackedFramebufferTexture(static_cast<u32>(_pTexture->name));
 	if (_size > G_IM_SIZ_8b)
 		_pTexture->textureBytes *= fbTexFormats.colorFormatBytes;
 	else
