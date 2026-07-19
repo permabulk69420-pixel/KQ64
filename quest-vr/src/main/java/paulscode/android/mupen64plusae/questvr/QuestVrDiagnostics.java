@@ -32,7 +32,10 @@ public final class QuestVrDiagnostics {
                     "started=" + timestamp() + "\n" +
                     "launch=" + launchDescription + "\n" +
                     "device=" + Build.MANUFACTURER + " " + Build.MODEL +
-                    " sdk=" + Build.VERSION.SDK_INT + " build=" + Build.DISPLAY + "\n" +
+                    " brand=" + Build.BRAND + " product=" + Build.PRODUCT +
+                    " deviceCode=" + Build.DEVICE + "\n" +
+                    "android=" + Build.VERSION.RELEASE + " sdk=" + Build.VERSION.SDK_INT +
+                    " build=" + Build.DISPLAY + " fingerprint=" + Build.FINGERPRINT + "\n" +
                     "process=" + Process.myPid() + " elapsedRealtimeMs=" +
                     SystemClock.elapsedRealtime() + "\n";
             writeBytes(sLogFile, header, false);

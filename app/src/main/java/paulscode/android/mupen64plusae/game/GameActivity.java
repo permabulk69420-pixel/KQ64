@@ -271,15 +271,23 @@ public class GameActivity extends AppCompatActivity implements PromptConfirmList
     public void onCreate(Bundle savedInstanceState) {
         Log.i(TAG, "onCreate");
         super.onCreate(savedInstanceState);
+        final Intent launchIntent = getIntent();
+        QuestVrDiagnostics.startSession(this,
+                "GameActivity action=" + (launchIntent == null ? null : launchIntent.getAction()) +
+                        " categories=" + (launchIntent == null ? null : launchIntent.getCategories()) +
+                        " restored=" + (savedInstanceState != null));
+        mQuestVrDiagnosticSession = true;
+
         final QuestVrSettings.Configuration launchVr = QuestVrSettings.load(this);
-        mQuestVrDiagnosticSession = launchVr.enabled && QuestVrBridge.isDeviceCapable(this);
-        if (mQuestVrDiagnosticSession) {
-            final Intent launchIntent = getIntent();
-            QuestVrDiagnostics.startSession(this,
-                    "GameActivity action=" + (launchIntent == null ? null : launchIntent.getAction()) +
-                            " restored=" + (savedInstanceState != null));
-            logQuestVrLifecycle("onCreate after super");
-        }
+        final boolean nativeLibraryLoaded = QuestVrBridge.isNativeLibraryLoaded();
+        final boolean headTrackingFeature = QuestVrBridge.hasHeadTrackingFeature(this);
+        QuestVrDiagnostics.info(TAG, "VR startup inputs vrEnabled=" + launchVr.enabled +
+                " nativeLibraryLoaded=" + nativeLibraryLoaded +
+                " headTrackingFeature=" + headTrackingFeature +
+                " launchAction=" + (launchIntent == null ? null : launchIntent.getAction()) +
+                " manufacturer=" + Build.MANUFACTURER + " model=" + Build.MODEL +
+                " sdk=" + Build.VERSION.SDK_INT + " build=" + Build.DISPLAY);
+        logQuestVrLifecycle("onCreate after super; persistent diagnostics active");
         super.setTheme( androidx.appcompat.R.style.Theme_AppCompat_NoActionBar );
 
         mAppData = new AppData( this );
@@ -596,7 +604,7 @@ public class GameActivity extends AppCompatActivity implements PromptConfirmList
         final QuestVrSettings.Configuration vr = QuestVrSettings.load(this);
         if (!vr.enabled || !vr.stereoEnabled ||
                 mGamePrefs.videoPluginLib != AppData.VideoPlugin.GLIDEN64 ||
-                !QuestVrBridge.isDeviceCapable(this)) {
+                !QuestVrBridge.isNativeLibraryLoaded()) {
             return baseWidth;
         }
 

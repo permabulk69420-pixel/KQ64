@@ -48,8 +48,13 @@ public final class QuestVrSettings {
     public static Configuration load(Context context) {
         SharedPreferences preferences = context.getSharedPreferences(PREFERENCES_NAME, Context.MODE_PRIVATE);
         Map<String, ?> values = preferences.getAll();
+        final boolean enabled = preferences.getBoolean("enabled", true);
+        QuestVrDiagnostics.info("QuestVrSettings", "Loaded preferences name=" +
+                PREFERENCES_NAME + " containsEnabled=" + preferences.contains("enabled") +
+                " rawEnabled=" + values.get("enabled") + " vrEnabled=" + enabled +
+                " entryCount=" + values.size());
         return new Configuration(
-                preferences.getBoolean("enabled", true),
+                enabled,
                 preferences.getBoolean("stereo_enabled", true),
                 preferences.getBoolean("swap_eyes", false),
                 getFloat(values, "ipd_meters", 0.064f),

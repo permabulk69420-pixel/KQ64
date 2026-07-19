@@ -3,7 +3,6 @@ package paulscode.android.mupen64plusae.questvr;
 import android.app.Activity;
 import android.content.Context;
 import android.os.SystemClock;
-import android.util.Log;
 import android.view.View;
 
 import java.io.File;
@@ -11,7 +10,7 @@ import java.io.File;
 /**
  * Thin Java owner for the optional OpenXR presentation path.
  *
- * All native calls except {@link #isDeviceCapable(Context)} must be made from the
+ * All native calls except the startup capability accessors must be made from the
  * GameSurface render thread while its EGL context is current.
  */
 public final class QuestVrBridge {
@@ -26,8 +25,11 @@ public final class QuestVrBridge {
         try {
             System.loadLibrary("mupen64plus-quest-vr");
             sLibraryLoaded = true;
+            QuestVrDiagnostics.info(TAG, "Loaded native library libmupen64plus-quest-vr.so");
         } catch (UnsatisfiedLinkError error) {
-            Log.w(TAG, "Quest VR native library is unavailable; using normal Android presentation", error);
+            QuestVrDiagnostics.error(TAG,
+                    "Quest VR native library is unavailable; using normal Android presentation",
+                    error);
             sLibraryLoaded = false;
         }
     }
@@ -35,8 +37,23 @@ public final class QuestVrBridge {
     private QuestVrBridge() {
     }
 
+    public static boolean isNativeLibraryLoaded() {
+        return sLibraryLoaded;
+    }
+
+    public static boolean hasHeadTrackingFeature(Context context) {
+        return context.getPackageManager().hasSystemFeature(HEAD_TRACKING_FEATURE);
+    }
+
+    /**
+     * Whether this APK can attempt the native OpenXR path.
+     *
+     * The Android head-tracking feature is deliberately advisory. Quest firmware/app packaging
+     * combinations can omit that PackageManager feature even though the OpenXR runtime is present.
+     * The loader/instance/system/session calls are the authoritative availability test.
+     */
     public static boolean isDeviceCapable(Context context) {
-        return sLibraryLoaded && context.getPackageManager().hasSystemFeature(HEAD_TRACKING_FEATURE);
+        return sLibraryLoaded;
     }
 
     /**
@@ -80,13 +97,18 @@ public final class QuestVrBridge {
 
     public static boolean initialize(Activity activity) {
         if (!sLibraryLoaded) {
+            QuestVrDiagnostics.error(TAG,
+                    "OpenXR initialization skipped because the native bridge library did not load",
+                    null);
             return false;
         }
 
         final File diagnosticLog = QuestVrDiagnostics.getLatestLogFile(activity);
         nativeConfigureDiagnosticLog(diagnosticLog.getAbsolutePath());
         QuestVrDiagnostics.info(TAG, "initialize entry activity=" + activity.getClass().getName() +
-                " finishing=" + activity.isFinishing() + " destroyed=" + activity.isDestroyed());
+                " finishing=" + activity.isFinishing() + " destroyed=" + activity.isDestroyed() +
+                " nativeLibraryLoaded=" + sLibraryLoaded + " headTrackingFeature=" +
+                hasHeadTrackingFeature(activity));
 
         // Claim the render-thread lifetime before the hand-off begins so a racing
         // SurfaceView.surfaceDestroyed callback cannot tear the EGL context down underneath JNI.

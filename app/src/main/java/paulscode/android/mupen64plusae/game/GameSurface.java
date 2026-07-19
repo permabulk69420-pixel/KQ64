@@ -795,10 +795,19 @@ public class GameSurface extends SurfaceView implements SurfaceHolder.Callback
             }
 
             mQuestVrConfiguration = QuestVrSettings.load(mContext);
-            final boolean questVrCandidate = mContext instanceof Activity &&
-                    mQuestVrConfiguration.enabled && QuestVrBridge.isDeviceCapable(mContext);
+            final boolean activityContext = mContext instanceof Activity;
+            final boolean nativeLibraryLoaded = QuestVrBridge.isNativeLibraryLoaded();
+            final boolean headTrackingFeature = QuestVrBridge.hasHeadTrackingFeature(mContext);
+            // The PackageManager feature is diagnostic only. The actual OpenXR loader/runtime
+            // calls decide availability, and initialize() restores flat presentation on failure.
+            final boolean questVrCandidate = activityContext && mQuestVrConfiguration.enabled &&
+                    nativeLibraryLoaded;
             mQuestVrCandidate = questVrCandidate;
-            logQuestVr("RenderThread Quest candidate=" + questVrCandidate +
+            QuestVrDiagnostics.info(TAG, "RenderThread startup gate vrEnabled=" +
+                    mQuestVrConfiguration.enabled + " nativeLibraryLoaded=" +
+                    nativeLibraryLoaded + " headTrackingFeature=" + headTrackingFeature +
+                    " activityContext=" + activityContext +
+                    " finalQuestVrCandidate=" + questVrCandidate +
                     " requestedGlVersion=" + (questVrCandidate ? 3 : 2));
             final int glVersion = questVrCandidate ? 3 : 2;
             if (createGLContext(glVersion, false)) {
@@ -1058,10 +1067,7 @@ public class GameSurface extends SurfaceView implements SurfaceHolder.Callback
     }
 
     private void logQuestVr(String message) {
-        if (mQuestVrCandidate || QuestVrBridge.shouldRetainRenderThreadOnSurfaceLoss() ||
-                (QuestVrSettings.load(mContext).enabled && QuestVrBridge.isDeviceCapable(mContext))) {
-            QuestVrDiagnostics.info(TAG, message);
-        }
+        QuestVrDiagnostics.info(TAG, message);
     }
 
     private void logQuestVrEglState(String label) {
