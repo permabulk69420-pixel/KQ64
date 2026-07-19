@@ -167,18 +167,23 @@ public final class QuestVrBridge {
 
     public static void configure(QuestVrSettings.Configuration configuration) {
         if (sLibraryLoaded) {
+            // Quest hardware validation of the folded Mario Kart camera path showed that its
+            // rotation convention is opposite the older late-clip path. Keep the user-facing
+            // setting intuitive: +1 follows the headset and negative values intentionally invert.
+            final float nativeRotationStrength = -configuration.rotationStrength;
             QuestVrDiagnostics.info(TAG, "Effective presentation mode=" +
                     configuration.presentationModeName + " immersiveViewScale=" +
                     configuration.immersiveViewScale + " screenScale=" +
                     configuration.screenScale + " screenDistance=" +
                     configuration.screenDistanceMeters + "m startupProofLayers=" +
                     configuration.startupProofLayers + " stereo=" +
-                    configuration.stereoEnabled);
+                    configuration.stereoEnabled + " rotation=" +
+                    configuration.rotationStrength + " nativeRotation=" + nativeRotationStrength);
             nativeConfigure(configuration.stereoEnabled, configuration.swapEyes, configuration.ipdMeters,
                     configuration.presentationMode, configuration.immersiveViewScale,
                     configuration.screenScale, configuration.screenDistanceMeters,
                     configuration.startupProofLayers,
-                    configuration.worldUnitsPerMeter, configuration.rotationStrength,
+                    configuration.worldUnitsPerMeter, nativeRotationStrength,
                     configuration.positionEnabled, configuration.maxTranslationMeters,
                     configuration.cameraOffsetXMeters, configuration.cameraOffsetYMeters,
                     configuration.cameraOffsetZMeters, configuration.useOpenXrFov,
