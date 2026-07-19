@@ -1,5 +1,10 @@
 # Quest VR prototype notes
 
+The latest Mario Kart race-camera, framebuffer-resolution, and hardware-test analysis is in
+[`QUEST_VR_MARIO_KART_CAMERA_AUDIT.md`](QUEST_VR_MARIO_KART_CAMERA_AUDIT.md). It supersedes the
+older assumption below that Mario Kart race draws were genuinely orthographic: the game commonly
+folds `guLookAt` into a real perspective projection, which the prototype previously misclassified.
+
 ## Status
 
 Audit branch: `ppsspp-openxr-audit` (based directly on `quest-vr-prototype` at
@@ -32,8 +37,8 @@ The prototype currently contains:
   cost while a proper anisotropic per-eye render-target path is developed;
 - expanded GLideN64 CPU clipping while stereo is active;
 - an OpenXR Touch action-set fallback merged with the normal player-one controller state;
-- a Mario Kart 64 profile using GLideN64's existing `hack_MK64` ROM identification, with a modest
-  close-chase offset restricted to perspective passes that advertise N64 Z-buffering;
+- a Mario Kart 64 profile using GLideN64's existing `hack_MK64` ROM identification, with recovery
+  for race views folded into the projection stack and optional camera offsets that default to zero;
 - automatic fallback to the existing Android presentation path when no VR headset/runtime is present.
 
 This is native stereo geometry work, not a completed-frame texture copied to both eyes. The OpenXR
@@ -205,9 +210,9 @@ malformed. Defaults are:
 | `hud_mode` | `monoscopic_overlay` | Documents the current zero-disparity HUD policy |
 | `culling_expansion` | `1.25` | Reserved for a graduated clipping policy |
 | `use_openxr_fov` | `true` | Replaces perspective angular terms with each runtime eye FOV |
-| `mario_kart_profile_enabled` | `true` | Enables the title-scoped close-chase experiment |
-| `mario_kart_camera_offset_y_meters` | `-0.20` | Lowers the tracked camera for MK64 Z-buffered world passes |
-| `mario_kart_camera_offset_z_meters` | `-0.75` | Moves the tracked camera toward the kart for MK64 world passes |
+| `mario_kart_profile_enabled` | `true` | Enables title-scoped folded race-camera recovery |
+| `mario_kart_camera_offset_y_meters` | `0.0` | Optional recovered camera-space height offset |
+| `mario_kart_camera_offset_z_meters` | `0.0` | Optional recovered camera-space chase-distance offset |
 | `stereo_source_width_multiplier_v2` | `2.0` | Aspect-preserving source multiplier; 2 requests the selected flat size for each eye |
 | `max_stereo_source_width` | `2688` | User cap for the complete side-by-side source width |
 | `touch_controller_enabled` | `true` | Merges OpenXR Touch input into N64 player one |

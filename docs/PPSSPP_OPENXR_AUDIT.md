@@ -1,5 +1,15 @@
 # PPSSPP/OpenXR divergence audit
 
+## Quest 3S follow-up: completed-image symptom resolved upstream of OpenXR
+
+The newest hardware report still showed a face-attached immersive image, but the checked-in log
+kept OpenXR, source-frame matching, and external-texture delivery healthy. The follow-up renderer
+audit found two upstream causes: `GlideN64-Fast` forced factor-1 native N64 framebuffers inside the
+large Android source, and Mario Kart folded its real chase-camera look-at matrix into the
+projection stack, defeating the bridge's canonical-perspective test. The focused fixes and next
+hardware contract are documented in
+[`QUEST_VR_MARIO_KART_CAMERA_AUDIT.md`](QUEST_VR_MARIO_KART_CAMERA_AUDIT.md).
+
 ## Quest 3S hardware follow-up: immersive/cinema split
 
 `quest-vr-diagnostic-latest.log` at branch commit
