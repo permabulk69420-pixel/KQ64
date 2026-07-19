@@ -51,6 +51,9 @@ void UnbufferedDrawer::drawTriangles(const graphics::Context::DrawTriangleParame
 			++modifiedPositionVertices;
 	}
 	QuestVr::noteGeometryVertices(_params.verticesCount, modifiedPositionVertices);
+	// drawScreenSpaceTriangle marks every vertex as already positioned in screen space. Duplicate
+	// those draws into both eye viewports, but do not apply the headset/world transform to them.
+	const bool transformGeometry = modifiedPositionVertices != _params.verticesCount;
 
 	{
 		m_cachedAttribArray->enableVertexAttribArray(triangleAttrib::position, true);
@@ -131,7 +134,7 @@ void UnbufferedDrawer::drawTriangles(const graphics::Context::DrawTriangleParame
 		}
 	};
 
-	QuestVr::DrawScope stereoDraw(true);
+	QuestVr::DrawScope stereoDraw(transformGeometry);
 	for (u32 eye = 0; eye < stereoDraw.eyeCount(); ++eye) {
 		stereoDraw.selectEye(eye);
 		draw();
