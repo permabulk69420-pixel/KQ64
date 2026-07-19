@@ -286,7 +286,7 @@
     <string name="questVrDebug_title">Periodic VR diagnostics</string>
     <string name="questVrDebug_summary">Log pose association, draw counts, target sizes, and native frame timing.</string>
     <string name="questVrProofLayers_title">Show startup proof layers</string>
-    <string name="questVrProofLayers_summary">Debug only: show the timed green quad and red/blue projection phases before the game screen.</string>
+    <string name="questVrProofLayers_summary">Debug only: show the timed green quad and a red/blue eye calibration pattern with border, centre lines, square, circle, and edge labels.</string>
     <string name="questVrExport_title">Export latest VR diagnostic</string>
     <string name="questVrExport_summary">Share the persistent lifecycle, EGL, OpenXR, swapchain, and SurfaceTexture report without ADB.</string>
     <string name="questVrExport_chooser">Share Quest/OpenXR diagnostic</string>

@@ -73,6 +73,7 @@ struct FramePoseState {
 struct ProgramUniforms {
 	GLint enabled{-1};
 	GLint transformEnabled{-1};
+	GLint screenSpaceTransformEnabled{-1};
 	GLint eye{-1};
 	std::array<GLint, 4> rows{{-1, -1, -1, -1}};
 };
@@ -129,6 +130,37 @@ std::atomic<unsigned int> s_modifiedPositionVertices{0};
 std::atomic<unsigned int> s_framebufferBlits{0};
 std::atomic<unsigned int> s_backgroundRectangles{0};
 std::atomic<unsigned int> s_sprite2DCommands{0};
+std::atomic<unsigned int> s_screenSpaceBatches{0};
+std::atomic<unsigned int> s_screenSpaceVertices{0};
+std::array<std::atomic<unsigned int>, 2> s_screenSpaceEyeDraws{};
+std::array<std::atomic<unsigned int>, 2> s_screenSpaceCorrections{};
+std::atomic<unsigned int> s_screenSpaceMissingUniformDraws{0};
+std::atomic<unsigned int> s_lastScreenSpaceFramebuffer{0};
+std::atomic<unsigned int> s_lastScreenSpaceProgram{0};
+std::atomic<unsigned int> s_lastScreenSpaceUniformMask{0};
+std::array<std::atomic<int>, 2> s_lastScreenSpaceOffsetXMicro{};
+std::array<std::atomic<int>, 2> s_lastScreenSpaceOffsetYMicro{};
+std::atomic<unsigned int> s_texrectScratchDraws{0};
+std::atomic<unsigned int> s_texrectScratchRectangles{0};
+std::atomic<unsigned int> s_texrectScratchFramebuffer{0};
+std::atomic<unsigned int> s_texrectScratchTexture{0};
+std::atomic<unsigned int> s_texrectScratchWidth{0};
+std::atomic<unsigned int> s_texrectScratchHeight{0};
+std::atomic<unsigned int> s_finalFramebufferBlits{0};
+std::atomic<unsigned int> s_lastFinalReadFramebuffer{0};
+std::atomic<unsigned int> s_lastFinalTexture{0};
+std::atomic<unsigned int> s_lastFinalPhysicalSourceWidth{0};
+std::atomic<unsigned int> s_lastFinalLogicalSourceWidth{0};
+std::atomic<unsigned int> s_lastFinalSourceHeight{0};
+std::atomic<unsigned int> s_lastFinalPhysicalDestinationWidth{0};
+std::atomic<unsigned int> s_lastFinalLogicalDestinationWidth{0};
+std::atomic<unsigned int> s_lastFinalDestinationHeight{0};
+std::atomic<int> s_lastFinalSourceX0{0};
+std::atomic<int> s_lastFinalSourceX1{0};
+std::atomic<int> s_lastFinalDestinationX0{0};
+std::atomic<int> s_lastFinalDestinationX1{0};
+std::atomic<unsigned int> s_lastFinalFilter{0};
+std::atomic<unsigned int> s_lastFinalClassification{0};
 std::atomic<unsigned int> s_targetWidthFallbacks{0};
 std::atomic<unsigned int> s_lastTargetWidth{0};
 std::atomic<unsigned int> s_framebufferAllocations{0};
@@ -642,19 +674,51 @@ const std::array<float, 16>* getScreenSpaceEyeTransform(unsigned int eye)
 	return &s_screenSpaceTransformCache.eyes[std::min(eye, 1U)];
 }
 
-void setProgramEye(unsigned int eye, bool enabled, bool transformGeometry,
+enum ProgramUniformBit : unsigned int {
+	ProgramUniformEnabled = 1U << 0,
+	ProgramUniformTransformEnabled = 1U << 1,
+	ProgramUniformScreenSpaceTransformEnabled = 1U << 2,
+	ProgramUniformRow0 = 1U << 3,
+	ProgramUniformRow1 = 1U << 4,
+	ProgramUniformRow2 = 1U << 5,
+	ProgramUniformRow3 = 1U << 6,
+};
+
+constexpr unsigned int RequiredScreenSpaceUniformMask =
+	ProgramUniformTransformEnabled | ProgramUniformScreenSpaceTransformEnabled |
+	ProgramUniformRow0 | ProgramUniformRow1 | ProgramUniformRow2 | ProgramUniformRow3;
+
+unsigned int getProgramUniformMask(const ProgramUniforms& uniforms)
+{
+	unsigned int mask = 0;
+	if (uniforms.enabled >= 0)
+		mask |= ProgramUniformEnabled;
+	if (uniforms.transformEnabled >= 0)
+		mask |= ProgramUniformTransformEnabled;
+	if (uniforms.screenSpaceTransformEnabled >= 0)
+		mask |= ProgramUniformScreenSpaceTransformEnabled;
+	for (unsigned int row = 0; row < uniforms.rows.size(); ++row) {
+		if (uniforms.rows[row] >= 0)
+			mask |= ProgramUniformRow0 << row;
+	}
+	return mask;
+}
+
+bool setProgramEye(unsigned int eye, bool enabled, bool transformGeometry,
 	bool correctScreenSpaceProjection)
 {
 	const auto program = s_programs.find(s_currentProgram);
 	if (program == s_programs.end())
-		return;
+		return false;
 	const ProgramUniforms& uniforms = program->second;
 	if (!enabled) {
 		if (uniforms.enabled >= 0)
 			glUniform1i(uniforms.enabled, 0);
 		if (uniforms.transformEnabled >= 0)
 			glUniform1i(uniforms.transformEnabled, 0);
-		return;
+		if (uniforms.screenSpaceTransformEnabled >= 0)
+			glUniform1i(uniforms.screenSpaceTransformEnabled, 0);
+		return false;
 	}
 	if (uniforms.enabled >= 0)
 		glUniform1i(uniforms.enabled, 1);
@@ -678,11 +742,20 @@ void setProgramEye(unsigned int eye, bool enabled, bool transformGeometry,
 			applyTransform = true;
 		}
 	}
+	const unsigned int uniformMask = getProgramUniformMask(uniforms);
+	if (correctScreenSpaceProjection &&
+		(uniformMask & RequiredScreenSpaceUniformMask) != RequiredScreenSpaceUniformMask) {
+		applyTransform = false;
+	}
 
 	if (uniforms.transformEnabled >= 0)
 		glUniform1i(uniforms.transformEnabled, applyTransform ? 1 : 0);
+	if (uniforms.screenSpaceTransformEnabled >= 0) {
+		glUniform1i(uniforms.screenSpaceTransformEnabled,
+			applyTransform && correctScreenSpaceProjection ? 1 : 0);
+	}
 	if (!applyTransform)
-		return;
+		return false;
 
 	for (int row = 0; row < 4; ++row) {
 		if (uniforms.rows[row] >= 0) {
@@ -690,6 +763,15 @@ void setProgramEye(unsigned int eye, bool enabled, bool transformGeometry,
 				matrix[8 + row], matrix[12 + row]);
 		}
 	}
+	if (correctScreenSpaceProjection) {
+		const unsigned int clampedEye = std::min(eye, 1U);
+		s_screenSpaceCorrections[clampedEye].fetch_add(1, std::memory_order_relaxed);
+		s_lastScreenSpaceOffsetXMicro[clampedEye].store(static_cast<int>(
+			std::lround(matrix[12] * 1000000.0f)), std::memory_order_relaxed);
+		s_lastScreenSpaceOffsetYMicro[clampedEye].store(static_cast<int>(
+			std::lround(matrix[13] * 1000000.0f)), std::memory_order_relaxed);
+	}
+	return true;
 }
 
 int mapCoordinate(int value, int sourceOrigin, int sourceSize, int targetOrigin, int targetSize)
@@ -860,6 +942,8 @@ void registerProgram(unsigned int program)
 	ProgramUniforms uniforms;
 	uniforms.enabled = glGetUniformLocation(program, "uQuestVrEnabled");
 	uniforms.transformEnabled = glGetUniformLocation(program, "uQuestVrTransformEnabled");
+	uniforms.screenSpaceTransformEnabled = glGetUniformLocation(program,
+		"uQuestVrScreenSpaceTransformEnabled");
 	uniforms.eye = glGetUniformLocation(program, "uQuestVrEye");
 	uniforms.rows[0] = glGetUniformLocation(program, "uQuestVrClipRow0");
 	uniforms.rows[1] = glGetUniformLocation(program, "uQuestVrClipRow1");
@@ -983,6 +1067,23 @@ void noteGeometryVertices(unsigned int totalVertices, unsigned int modifiedPosit
 		std::memory_order_relaxed);
 }
 
+void noteScreenSpaceBatch(unsigned int vertices)
+{
+	if (!isStereoEnabled())
+		return;
+	s_screenSpaceBatches.fetch_add(1, std::memory_order_relaxed);
+	s_screenSpaceVertices.fetch_add(vertices, std::memory_order_relaxed);
+	s_lastScreenSpaceFramebuffer.store(s_drawFramebuffer, std::memory_order_relaxed);
+	s_lastScreenSpaceProgram.store(s_currentProgram, std::memory_order_relaxed);
+	const auto program = s_programs.find(s_currentProgram);
+	const unsigned int mask = program == s_programs.end()
+		? 0U : getProgramUniformMask(program->second);
+	s_lastScreenSpaceUniformMask.store(mask, std::memory_order_relaxed);
+	if ((mask & RequiredScreenSpaceUniformMask) != RequiredScreenSpaceUniformMask) {
+		s_screenSpaceMissingUniformDraws.fetch_add(1, std::memory_order_relaxed);
+	}
+}
+
 void noteBackgroundRectangle()
 {
 	if (isStereoEnabled())
@@ -993,6 +1094,55 @@ void noteSprite2D()
 {
 	if (isStereoEnabled())
 		s_sprite2DCommands.fetch_add(1, std::memory_order_relaxed);
+}
+
+void noteTexrectScratchTarget(unsigned int framebuffer, unsigned int texture,
+	unsigned int width, unsigned int height)
+{
+	if (!isStereoEnabled())
+		return;
+	s_texrectScratchFramebuffer.store(framebuffer, std::memory_order_relaxed);
+	s_texrectScratchTexture.store(texture, std::memory_order_relaxed);
+	s_texrectScratchWidth.store(width, std::memory_order_relaxed);
+	s_texrectScratchHeight.store(height, std::memory_order_relaxed);
+}
+
+void noteTexrectScratchDraw(unsigned int rectangles)
+{
+	if (!isStereoEnabled())
+		return;
+	s_texrectScratchDraws.fetch_add(1, std::memory_order_relaxed);
+	s_texrectScratchRectangles.fetch_add(rectangles, std::memory_order_relaxed);
+}
+
+void noteFinalFramebufferBlit(unsigned int readFramebuffer, unsigned int texture,
+	unsigned int physicalSourceWidth, unsigned int logicalSourceWidth,
+	unsigned int sourceHeight, unsigned int physicalDestinationWidth,
+	unsigned int logicalDestinationWidth, unsigned int destinationHeight,
+	int sourceX0, int sourceX1, int destinationX0, int destinationX1,
+	unsigned int filter)
+{
+	if (!isStereoEnabled())
+		return;
+	s_finalFramebufferBlits.fetch_add(1, std::memory_order_relaxed);
+	s_lastFinalReadFramebuffer.store(readFramebuffer, std::memory_order_relaxed);
+	s_lastFinalTexture.store(texture, std::memory_order_relaxed);
+	s_lastFinalPhysicalSourceWidth.store(physicalSourceWidth, std::memory_order_relaxed);
+	s_lastFinalLogicalSourceWidth.store(logicalSourceWidth, std::memory_order_relaxed);
+	s_lastFinalSourceHeight.store(sourceHeight, std::memory_order_relaxed);
+	s_lastFinalPhysicalDestinationWidth.store(physicalDestinationWidth,
+		std::memory_order_relaxed);
+	s_lastFinalLogicalDestinationWidth.store(logicalDestinationWidth,
+		std::memory_order_relaxed);
+	s_lastFinalDestinationHeight.store(destinationHeight, std::memory_order_relaxed);
+	s_lastFinalSourceX0.store(sourceX0, std::memory_order_relaxed);
+	s_lastFinalSourceX1.store(sourceX1, std::memory_order_relaxed);
+	s_lastFinalDestinationX0.store(destinationX0, std::memory_order_relaxed);
+	s_lastFinalDestinationX1.store(destinationX1, std::memory_order_relaxed);
+	s_lastFinalFilter.store(filter, std::memory_order_relaxed);
+	const unsigned int classification = (isPackedFramebuffer(readFramebuffer) ? 1U : 0U) |
+		(isPackedFramebuffer(0) ? 2U : 0U);
+	s_lastFinalClassification.store(classification, std::memory_order_relaxed);
 }
 
 BlitScope::BlitScope(unsigned int readFramebuffer, unsigned int drawFramebuffer)
@@ -1090,6 +1240,10 @@ void DrawScope::selectEye(unsigned int eye)
 	if (!m_active)
 		return;
 	s_eyeDraws.fetch_add(1, std::memory_order_relaxed);
+	if (m_correctScreenSpaceProjection) {
+		s_screenSpaceEyeDraws[std::min(eye, 1U)].fetch_add(1,
+			std::memory_order_relaxed);
+	}
 
 	const int leftTargetWidth = m_targetWidth / 2;
 	const int eyeTargetX = eye == 0 ? 0 : leftTargetWidth;
@@ -1143,6 +1297,39 @@ extern "C" QUEST_VR_EXPORT void M64PQuestVrSetEnabled(int enabled)
 		s_framebufferBlits.store(0, std::memory_order_relaxed);
 		s_backgroundRectangles.store(0, std::memory_order_relaxed);
 		s_sprite2DCommands.store(0, std::memory_order_relaxed);
+		s_screenSpaceBatches.store(0, std::memory_order_relaxed);
+		s_screenSpaceVertices.store(0, std::memory_order_relaxed);
+		for (unsigned int eye = 0; eye < 2; ++eye) {
+			s_screenSpaceEyeDraws[eye].store(0, std::memory_order_relaxed);
+			s_screenSpaceCorrections[eye].store(0, std::memory_order_relaxed);
+			s_lastScreenSpaceOffsetXMicro[eye].store(0, std::memory_order_relaxed);
+			s_lastScreenSpaceOffsetYMicro[eye].store(0, std::memory_order_relaxed);
+		}
+		s_screenSpaceMissingUniformDraws.store(0, std::memory_order_relaxed);
+		s_lastScreenSpaceFramebuffer.store(0, std::memory_order_relaxed);
+		s_lastScreenSpaceProgram.store(0, std::memory_order_relaxed);
+		s_lastScreenSpaceUniformMask.store(0, std::memory_order_relaxed);
+		s_texrectScratchDraws.store(0, std::memory_order_relaxed);
+		s_texrectScratchRectangles.store(0, std::memory_order_relaxed);
+		s_texrectScratchFramebuffer.store(0, std::memory_order_relaxed);
+		s_texrectScratchTexture.store(0, std::memory_order_relaxed);
+		s_texrectScratchWidth.store(0, std::memory_order_relaxed);
+		s_texrectScratchHeight.store(0, std::memory_order_relaxed);
+		s_finalFramebufferBlits.store(0, std::memory_order_relaxed);
+		s_lastFinalReadFramebuffer.store(0, std::memory_order_relaxed);
+		s_lastFinalTexture.store(0, std::memory_order_relaxed);
+		s_lastFinalPhysicalSourceWidth.store(0, std::memory_order_relaxed);
+		s_lastFinalLogicalSourceWidth.store(0, std::memory_order_relaxed);
+		s_lastFinalSourceHeight.store(0, std::memory_order_relaxed);
+		s_lastFinalPhysicalDestinationWidth.store(0, std::memory_order_relaxed);
+		s_lastFinalLogicalDestinationWidth.store(0, std::memory_order_relaxed);
+		s_lastFinalDestinationHeight.store(0, std::memory_order_relaxed);
+		s_lastFinalSourceX0.store(0, std::memory_order_relaxed);
+		s_lastFinalSourceX1.store(0, std::memory_order_relaxed);
+		s_lastFinalDestinationX0.store(0, std::memory_order_relaxed);
+		s_lastFinalDestinationX1.store(0, std::memory_order_relaxed);
+		s_lastFinalFilter.store(0, std::memory_order_relaxed);
+		s_lastFinalClassification.store(0, std::memory_order_relaxed);
 		s_targetWidthFallbacks.store(0, std::memory_order_relaxed);
 		s_lastTargetWidth.store(0, std::memory_order_relaxed);
 		s_framebufferAllocations.store(0, std::memory_order_relaxed);
@@ -1324,6 +1511,101 @@ extern "C" QUEST_VR_EXPORT void M64PQuestVrGetPipelineStats(
 		*scissorWidth = s_lastScissorWidth.load(std::memory_order_relaxed);
 	if (scissorHeight != nullptr)
 		*scissorHeight = s_lastScissorHeight.load(std::memory_order_relaxed);
+}
+
+extern "C" QUEST_VR_EXPORT void M64PQuestVrGetUiStats(
+	unsigned int* screenSpaceBatches, unsigned int* screenSpaceVertices,
+	unsigned int* leftEyeDraws, unsigned int* rightEyeDraws,
+	unsigned int* leftCorrections, unsigned int* rightCorrections,
+	unsigned int* missingUniformDraws, unsigned int* lastFramebuffer,
+	unsigned int* lastProgram, unsigned int* lastUniformMask,
+	std::int32_t* leftOffsetXMicro, std::int32_t* leftOffsetYMicro,
+	std::int32_t* rightOffsetXMicro, std::int32_t* rightOffsetYMicro,
+	unsigned int* finalBlits, unsigned int* finalReadFramebuffer,
+	unsigned int* finalTexture, unsigned int* finalPhysicalSourceWidth,
+	unsigned int* finalLogicalSourceWidth, unsigned int* finalSourceHeight,
+	unsigned int* finalPhysicalDestinationWidth,
+	unsigned int* finalLogicalDestinationWidth,
+	unsigned int* finalDestinationHeight, std::int32_t* finalSourceX0,
+	std::int32_t* finalSourceX1, std::int32_t* finalDestinationX0,
+	std::int32_t* finalDestinationX1, unsigned int* finalFilter,
+	unsigned int* finalClassification,
+	unsigned int* scratchDraws, unsigned int* scratchRectangles,
+	unsigned int* scratchFramebuffer, unsigned int* scratchTexture,
+	unsigned int* scratchWidth, unsigned int* scratchHeight)
+{
+	if (screenSpaceBatches != nullptr)
+		*screenSpaceBatches = s_screenSpaceBatches.load(std::memory_order_relaxed);
+	if (screenSpaceVertices != nullptr)
+		*screenSpaceVertices = s_screenSpaceVertices.load(std::memory_order_relaxed);
+	if (leftEyeDraws != nullptr)
+		*leftEyeDraws = s_screenSpaceEyeDraws[0].load(std::memory_order_relaxed);
+	if (rightEyeDraws != nullptr)
+		*rightEyeDraws = s_screenSpaceEyeDraws[1].load(std::memory_order_relaxed);
+	if (leftCorrections != nullptr)
+		*leftCorrections = s_screenSpaceCorrections[0].load(std::memory_order_relaxed);
+	if (rightCorrections != nullptr)
+		*rightCorrections = s_screenSpaceCorrections[1].load(std::memory_order_relaxed);
+	if (missingUniformDraws != nullptr)
+		*missingUniformDraws = s_screenSpaceMissingUniformDraws.load(std::memory_order_relaxed);
+	if (lastFramebuffer != nullptr)
+		*lastFramebuffer = s_lastScreenSpaceFramebuffer.load(std::memory_order_relaxed);
+	if (lastProgram != nullptr)
+		*lastProgram = s_lastScreenSpaceProgram.load(std::memory_order_relaxed);
+	if (lastUniformMask != nullptr)
+		*lastUniformMask = s_lastScreenSpaceUniformMask.load(std::memory_order_relaxed);
+	if (leftOffsetXMicro != nullptr)
+		*leftOffsetXMicro = s_lastScreenSpaceOffsetXMicro[0].load(std::memory_order_relaxed);
+	if (leftOffsetYMicro != nullptr)
+		*leftOffsetYMicro = s_lastScreenSpaceOffsetYMicro[0].load(std::memory_order_relaxed);
+	if (rightOffsetXMicro != nullptr)
+		*rightOffsetXMicro = s_lastScreenSpaceOffsetXMicro[1].load(std::memory_order_relaxed);
+	if (rightOffsetYMicro != nullptr)
+		*rightOffsetYMicro = s_lastScreenSpaceOffsetYMicro[1].load(std::memory_order_relaxed);
+	if (finalBlits != nullptr)
+		*finalBlits = s_finalFramebufferBlits.load(std::memory_order_relaxed);
+	if (finalReadFramebuffer != nullptr)
+		*finalReadFramebuffer = s_lastFinalReadFramebuffer.load(std::memory_order_relaxed);
+	if (finalTexture != nullptr)
+		*finalTexture = s_lastFinalTexture.load(std::memory_order_relaxed);
+	if (finalPhysicalSourceWidth != nullptr)
+		*finalPhysicalSourceWidth = s_lastFinalPhysicalSourceWidth.load(std::memory_order_relaxed);
+	if (finalLogicalSourceWidth != nullptr)
+		*finalLogicalSourceWidth = s_lastFinalLogicalSourceWidth.load(std::memory_order_relaxed);
+	if (finalSourceHeight != nullptr)
+		*finalSourceHeight = s_lastFinalSourceHeight.load(std::memory_order_relaxed);
+	if (finalPhysicalDestinationWidth != nullptr)
+		*finalPhysicalDestinationWidth =
+			s_lastFinalPhysicalDestinationWidth.load(std::memory_order_relaxed);
+	if (finalLogicalDestinationWidth != nullptr)
+		*finalLogicalDestinationWidth =
+			s_lastFinalLogicalDestinationWidth.load(std::memory_order_relaxed);
+	if (finalDestinationHeight != nullptr)
+		*finalDestinationHeight = s_lastFinalDestinationHeight.load(std::memory_order_relaxed);
+	if (finalSourceX0 != nullptr)
+		*finalSourceX0 = s_lastFinalSourceX0.load(std::memory_order_relaxed);
+	if (finalSourceX1 != nullptr)
+		*finalSourceX1 = s_lastFinalSourceX1.load(std::memory_order_relaxed);
+	if (finalDestinationX0 != nullptr)
+		*finalDestinationX0 = s_lastFinalDestinationX0.load(std::memory_order_relaxed);
+	if (finalDestinationX1 != nullptr)
+		*finalDestinationX1 = s_lastFinalDestinationX1.load(std::memory_order_relaxed);
+	if (finalFilter != nullptr)
+		*finalFilter = s_lastFinalFilter.load(std::memory_order_relaxed);
+	if (finalClassification != nullptr)
+		*finalClassification = s_lastFinalClassification.load(std::memory_order_relaxed);
+	if (scratchDraws != nullptr)
+		*scratchDraws = s_texrectScratchDraws.load(std::memory_order_relaxed);
+	if (scratchRectangles != nullptr)
+		*scratchRectangles = s_texrectScratchRectangles.load(std::memory_order_relaxed);
+	if (scratchFramebuffer != nullptr)
+		*scratchFramebuffer = s_texrectScratchFramebuffer.load(std::memory_order_relaxed);
+	if (scratchTexture != nullptr)
+		*scratchTexture = s_texrectScratchTexture.load(std::memory_order_relaxed);
+	if (scratchWidth != nullptr)
+		*scratchWidth = s_texrectScratchWidth.load(std::memory_order_relaxed);
+	if (scratchHeight != nullptr)
+		*scratchHeight = s_texrectScratchHeight.load(std::memory_order_relaxed);
 }
 
 extern "C" QUEST_VR_EXPORT std::int64_t M64PQuestVrGetPresentedPoseTimestamp()

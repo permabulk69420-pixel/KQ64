@@ -14,7 +14,9 @@
 #include <chrono>
 #include <cmath>
 #include <cstdio>
+#include <cstdint>
 #include <cstring>
+#include <limits>
 #include <string>
 #include <vector>
 
@@ -107,6 +109,26 @@ using GetVrPipelineStatsFn = void (*)(uint32_t* canonicalPerspectiveDraws,
                                       uint32_t* viewportHeight,
                                       uint32_t* scissorWidth,
                                       uint32_t* scissorHeight);
+using GetVrUiStatsFn = void (*)(
+    uint32_t* screenSpaceBatches, uint32_t* screenSpaceVertices,
+    uint32_t* leftEyeDraws, uint32_t* rightEyeDraws,
+    uint32_t* leftCorrections, uint32_t* rightCorrections,
+    uint32_t* missingUniformDraws, uint32_t* lastFramebuffer,
+    uint32_t* lastProgram, uint32_t* lastUniformMask,
+    int32_t* leftOffsetXMicro, int32_t* leftOffsetYMicro,
+    int32_t* rightOffsetXMicro, int32_t* rightOffsetYMicro,
+    uint32_t* finalBlits, uint32_t* finalReadFramebuffer,
+    uint32_t* finalTexture, uint32_t* finalPhysicalSourceWidth,
+    uint32_t* finalLogicalSourceWidth, uint32_t* finalSourceHeight,
+    uint32_t* finalPhysicalDestinationWidth,
+    uint32_t* finalLogicalDestinationWidth,
+    uint32_t* finalDestinationHeight, int32_t* finalSourceX0,
+    int32_t* finalSourceX1, int32_t* finalDestinationX0,
+    int32_t* finalDestinationX1, uint32_t* finalFilter,
+    uint32_t* finalClassification,
+    uint32_t* scratchDraws, uint32_t* scratchRectangles,
+    uint32_t* scratchFramebuffer, uint32_t* scratchTexture,
+    uint32_t* scratchWidth, uint32_t* scratchHeight);
 using GetPresentedPoseTimestampFn = int64_t (*)();
 using SetVrInputFn = void (*)(int enabled, uint32_t buttonMask, float analogX, float analogY);
 
@@ -162,6 +184,10 @@ struct State {
     GLint sourceUniform{-1};
     GLint uvTransformUniform{-1};
     GLint quadScaleUniform{-1};
+    GLint surfaceTransformUniform{-1};
+    GLint calibrationModeUniform{-1};
+    GLint calibrationEyeUniform{-1};
+    GLint targetAspectUniform{-1};
     bool sourceBlitReady{false};
 
     GLuint sourceTexture{0};
@@ -171,6 +197,14 @@ struct State {
     bool stereoRequested{false};
     bool stereoSourceActive{false};
     bool immersiveScaleLogged{false};
+    std::array<float, 16> sourceTransform{{
+        1.0f, 0.0f, 0.0f, 0.0f,
+        0.0f, 1.0f, 0.0f, 0.0f,
+        0.0f, 0.0f, 1.0f, 0.0f,
+        0.0f, 0.0f, 0.0f, 1.0f,
+    }};
+    uint32_t sourceTransformUpdates{0};
+    uint32_t sourceTransformChanges{0};
 
     SetVrEnabledFn setVrEnabled{nullptr};
     SetVrPoseFn setVrPose{nullptr};
@@ -179,6 +213,7 @@ struct State {
     RecenterVrFn recenterVr{nullptr};
     GetVrStatsFn getVrStats{nullptr};
     GetVrPipelineStatsFn getVrPipelineStats{nullptr};
+    GetVrUiStatsFn getVrUiStats{nullptr};
     GetPresentedPoseTimestampFn getPresentedPoseTimestamp{nullptr};
     SetVrInputFn setVrInput{nullptr};
     void* rendererLibraryHandle{nullptr};
@@ -572,17 +607,21 @@ bool createGlResources() {
     static constexpr const char* vertexSource = R"glsl(#version 300 es
 precision highp float;
 out vec2 vUv;
+out vec2 vPatternUv;
 uniform vec4 uUvTransform;
 uniform vec2 uQuadScale;
+uniform mat4 uSurfaceTransform;
 const vec2 positions[6] = vec2[6](
     vec2(-1.0, -1.0), vec2( 1.0, -1.0), vec2(-1.0,  1.0),
     vec2(-1.0,  1.0), vec2( 1.0, -1.0), vec2( 1.0,  1.0));
 const vec2 texcoords[6] = vec2[6](
-    vec2(0.0, 1.0), vec2(1.0, 1.0), vec2(0.0, 0.0),
-    vec2(0.0, 0.0), vec2(1.0, 1.0), vec2(1.0, 0.0));
+    vec2(0.0, 0.0), vec2(1.0, 0.0), vec2(0.0, 1.0),
+    vec2(0.0, 1.0), vec2(1.0, 0.0), vec2(1.0, 1.0));
 void main() {
     gl_Position = vec4(positions[gl_VertexID] * uQuadScale, 0.0, 1.0);
-    vUv = texcoords[gl_VertexID] * uUvTransform.xy + uUvTransform.zw;
+    vec2 sourceUv = texcoords[gl_VertexID] * uUvTransform.xy + uUvTransform.zw;
+    vPatternUv = texcoords[gl_VertexID];
+    vUv = (uSurfaceTransform * vec4(sourceUv, 0.0, 1.0)).xy;
 }
 )glsl";
 
@@ -590,9 +629,55 @@ void main() {
 #extension GL_OES_EGL_image_external_essl3 : require
 precision mediump float;
 in vec2 vUv;
+in vec2 vPatternUv;
 layout(location = 0) out vec4 outColor;
 uniform samplerExternalOES uSource;
+uniform lowp int uCalibrationMode;
+uniform lowp int uCalibrationEye;
+uniform highp float uTargetAspect;
+float segment(vec2 point, vec2 start, vec2 end, float width) {
+    vec2 line = end - start;
+    float along = clamp(dot(point - start, line) / dot(line, line), 0.0, 1.0);
+    float distanceToLine = length(point - (start + line * along));
+    return 1.0 - smoothstep(width, width * 1.6, distanceToLine);
+}
+float boxDistance(vec2 point, vec2 halfSize) {
+    vec2 delta = abs(point) - halfSize;
+    return length(max(delta, 0.0)) + min(max(delta.x, delta.y), 0.0);
+}
 void main() {
+    if (uCalibrationMode != 0) {
+        vec2 uv = vPatternUv;
+        vec2 point = vec2((uv.x - 0.5) * uTargetAspect, uv.y - 0.5);
+        vec3 color = uCalibrationEye == 0
+            ? vec3(0.18, 0.015, 0.015) : vec3(0.015, 0.025, 0.18);
+        float border = max(max(1.0 - smoothstep(0.008, 0.014, uv.x),
+                               1.0 - smoothstep(0.008, 0.014, 1.0 - uv.x)),
+                           max(1.0 - smoothstep(0.008, 0.014, uv.y),
+                               1.0 - smoothstep(0.008, 0.014, 1.0 - uv.y)));
+        float centers = max(1.0 - smoothstep(0.003, 0.007, abs(uv.x - 0.5)),
+                            1.0 - smoothstep(0.003, 0.007, abs(uv.y - 0.5)));
+        float square = 1.0 - smoothstep(0.006, 0.012,
+            abs(boxDistance(point - vec2(-0.22, 0.0), vec2(0.12))));
+        float circle = 1.0 - smoothstep(0.006, 0.012,
+            abs(length(point - vec2(0.22, 0.0)) - 0.12));
+        float leftLabel = max(segment(uv, vec2(0.035, 0.56), vec2(0.035, 0.44), 0.006),
+                              segment(uv, vec2(0.035, 0.44), vec2(0.085, 0.44), 0.006));
+        float rightLabel = segment(uv, vec2(0.915, 0.44), vec2(0.915, 0.56), 0.006);
+        rightLabel = max(rightLabel,
+            segment(uv, vec2(0.915, 0.56), vec2(0.965, 0.56), 0.006));
+        rightLabel = max(rightLabel,
+            segment(uv, vec2(0.965, 0.56), vec2(0.965, 0.50), 0.006));
+        rightLabel = max(rightLabel,
+            segment(uv, vec2(0.915, 0.50), vec2(0.965, 0.50), 0.006));
+        rightLabel = max(rightLabel,
+            segment(uv, vec2(0.94, 0.50), vec2(0.97, 0.44), 0.006));
+        color = mix(color, vec3(1.0), max(max(border, centers), max(square, circle)));
+        color = mix(color, vec3(1.0, 0.15, 0.08), leftLabel);
+        color = mix(color, vec3(0.10, 0.65, 1.0), rightLabel);
+        outColor = vec4(color, 1.0);
+        return;
+    }
     outColor = texture(uSource, vUv);
 }
 )glsl";
@@ -631,13 +716,21 @@ void main() {
     g.sourceUniform = glGetUniformLocation(g.program, "uSource");
     g.uvTransformUniform = glGetUniformLocation(g.program, "uUvTransform");
     g.quadScaleUniform = glGetUniformLocation(g.program, "uQuadScale");
+    g.surfaceTransformUniform = glGetUniformLocation(g.program, "uSurfaceTransform");
+    g.calibrationModeUniform = glGetUniformLocation(g.program, "uCalibrationMode");
+    g.calibrationEyeUniform = glGetUniformLocation(g.program, "uCalibrationEye");
+    g.targetAspectUniform = glGetUniformLocation(g.program, "uTargetAspect");
     glGenVertexArrays(1, &g.vertexArray);
     const GLenum resourceError = glGetError();
     if (g.sourceUniform < 0 || g.uvTransformUniform < 0 || g.quadScaleUniform < 0 ||
+            g.surfaceTransformUniform < 0 || g.calibrationModeUniform < 0 ||
+            g.calibrationEyeUniform < 0 || g.targetAspectUniform < 0 ||
             g.vertexArray == 0 || resourceError != GL_NO_ERROR) {
-        LOGE("External-OES blit resources invalid: source=%d uv=%d scale=%d vao=%u error=0x%x",
-             g.sourceUniform, g.uvTransformUniform, g.quadScaleUniform, g.vertexArray,
-             resourceError);
+        LOGE("External-OES blit resources invalid: source=%d uv=%d scale=%d "
+             "surfaceMatrix=%d calibration=[%d,%d,%d] vao=%u error=0x%x", g.sourceUniform,
+             g.uvTransformUniform, g.quadScaleUniform, g.surfaceTransformUniform,
+             g.calibrationModeUniform, g.calibrationEyeUniform, g.targetAspectUniform,
+             g.vertexArray, resourceError);
         if (g.vertexArray != 0) glDeleteVertexArrays(1, &g.vertexArray);
         if (g.program != 0) glDeleteProgram(g.program);
         g.vertexArray = 0;
@@ -665,6 +758,8 @@ void resolveRendererBridge() {
     g.getVrStats = reinterpret_cast<GetVrStatsFn>(dlsym(symbolScope, "M64PQuestVrGetStats"));
     g.getVrPipelineStats = reinterpret_cast<GetVrPipelineStatsFn>(
         dlsym(symbolScope, "M64PQuestVrGetPipelineStats"));
+    g.getVrUiStats = reinterpret_cast<GetVrUiStatsFn>(
+        dlsym(symbolScope, "M64PQuestVrGetUiStats"));
     g.getPresentedPoseTimestamp = reinterpret_cast<GetPresentedPoseTimestampFn>(
         dlsym(symbolScope, "M64PQuestVrGetPresentedPoseTimestamp"));
 
@@ -696,6 +791,117 @@ void resolveRendererBridge() {
     if (videoPlugin != nullptr) {
         dlclose(videoPlugin);
     }
+}
+
+struct RendererUiStats {
+    uint32_t screenSpaceBatches{0};
+    uint32_t screenSpaceVertices{0};
+    uint32_t leftEyeDraws{0};
+    uint32_t rightEyeDraws{0};
+    uint32_t leftCorrections{0};
+    uint32_t rightCorrections{0};
+    uint32_t missingUniformDraws{0};
+    uint32_t lastFramebuffer{0};
+    uint32_t lastProgram{0};
+    uint32_t lastUniformMask{0};
+    int32_t leftOffsetXMicro{0};
+    int32_t leftOffsetYMicro{0};
+    int32_t rightOffsetXMicro{0};
+    int32_t rightOffsetYMicro{0};
+    uint32_t finalBlits{0};
+    uint32_t finalReadFramebuffer{0};
+    uint32_t finalTexture{0};
+    uint32_t finalPhysicalSourceWidth{0};
+    uint32_t finalLogicalSourceWidth{0};
+    uint32_t finalSourceHeight{0};
+    uint32_t finalPhysicalDestinationWidth{0};
+    uint32_t finalLogicalDestinationWidth{0};
+    uint32_t finalDestinationHeight{0};
+    int32_t finalSourceX0{0};
+    int32_t finalSourceX1{0};
+    int32_t finalDestinationX0{0};
+    int32_t finalDestinationX1{0};
+    uint32_t finalFilter{0};
+    uint32_t finalClassification{0};
+    uint32_t scratchDraws{0};
+    uint32_t scratchRectangles{0};
+    uint32_t scratchFramebuffer{0};
+    uint32_t scratchTexture{0};
+    uint32_t scratchWidth{0};
+    uint32_t scratchHeight{0};
+};
+
+bool queryRendererUiStats(RendererUiStats& stats) {
+    resolveRendererBridge();
+    if (g.getVrUiStats == nullptr)
+        return false;
+    g.getVrUiStats(
+        &stats.screenSpaceBatches, &stats.screenSpaceVertices,
+        &stats.leftEyeDraws, &stats.rightEyeDraws,
+        &stats.leftCorrections, &stats.rightCorrections,
+        &stats.missingUniformDraws, &stats.lastFramebuffer,
+        &stats.lastProgram, &stats.lastUniformMask,
+        &stats.leftOffsetXMicro, &stats.leftOffsetYMicro,
+        &stats.rightOffsetXMicro, &stats.rightOffsetYMicro,
+        &stats.finalBlits, &stats.finalReadFramebuffer,
+        &stats.finalTexture, &stats.finalPhysicalSourceWidth,
+        &stats.finalLogicalSourceWidth, &stats.finalSourceHeight,
+        &stats.finalPhysicalDestinationWidth,
+        &stats.finalLogicalDestinationWidth,
+        &stats.finalDestinationHeight, &stats.finalSourceX0,
+        &stats.finalSourceX1, &stats.finalDestinationX0,
+        &stats.finalDestinationX1, &stats.finalFilter,
+        &stats.finalClassification,
+        &stats.scratchDraws, &stats.scratchRectangles,
+        &stats.scratchFramebuffer, &stats.scratchTexture,
+        &stats.scratchWidth, &stats.scratchHeight);
+    return true;
+}
+
+void logRendererUiStats(const char* reason) {
+    RendererUiStats stats;
+    if (!queryRendererUiStats(stats)) {
+        LOGW("UI pipeline snapshot reason=%s unavailable: renderer symbol missing", reason);
+        return;
+    }
+    constexpr uint32_t enabledBit = 1U << 0;
+    constexpr uint32_t transformBit = 1U << 1;
+    constexpr uint32_t screenTransformBit = 1U << 2;
+    constexpr uint32_t rowMask = 0x78U;
+    LOGI("UI pipeline snapshot reason=%s screenBatches=%u vertices=%u eyeDraws=[%u,%u] "
+         "corrections=[%u,%u] offsetsNdc=[%.6f,%.6f | %.6f,%.6f] "
+         "lastFbo=%u program=%u uniformMask=0x%02x "
+         "uniforms={enabled:%d transform:%d screenTransform:%d rows:%d} missing=%u "
+         "finalBlits=%u readFbo=%u texture=%u sourcePhysical=%ux%u "
+         "sourceLogical=%ux%u sourceRect=[%d,%d] destinationPhysical=%ux%u "
+         "destinationLogical=%ux%u destinationRect=[%d,%d] filter=0x%x "
+         "texrectScratch draws=%u rectangles=%u fbo=%u texture=%u size=%ux%u "
+         "classification={source:%s destination:%s splitCount:%u}",
+         reason, stats.screenSpaceBatches, stats.screenSpaceVertices,
+         stats.leftEyeDraws, stats.rightEyeDraws, stats.leftCorrections,
+         stats.rightCorrections, stats.leftOffsetXMicro / 1000000.0f,
+         stats.leftOffsetYMicro / 1000000.0f,
+         stats.rightOffsetXMicro / 1000000.0f,
+         stats.rightOffsetYMicro / 1000000.0f, stats.lastFramebuffer,
+         stats.lastProgram, stats.lastUniformMask,
+         (stats.lastUniformMask & enabledBit) != 0 ? 1 : 0,
+         (stats.lastUniformMask & transformBit) != 0 ? 1 : 0,
+         (stats.lastUniformMask & screenTransformBit) != 0 ? 1 : 0,
+         (stats.lastUniformMask & rowMask) == rowMask ? 1 : 0,
+         stats.missingUniformDraws, stats.finalBlits,
+         stats.finalReadFramebuffer, stats.finalTexture,
+         stats.finalPhysicalSourceWidth, stats.finalSourceHeight,
+         stats.finalLogicalSourceWidth, stats.finalSourceHeight,
+         stats.finalSourceX0, stats.finalSourceX1,
+         stats.finalPhysicalDestinationWidth, stats.finalDestinationHeight,
+         stats.finalLogicalDestinationWidth, stats.finalDestinationHeight,
+         stats.finalDestinationX0, stats.finalDestinationX1, stats.finalFilter,
+         stats.scratchDraws, stats.scratchRectangles,
+         stats.scratchFramebuffer, stats.scratchTexture,
+         stats.scratchWidth, stats.scratchHeight,
+         (stats.finalClassification & 1U) != 0 ? "PACKED_SBS" : "MONO",
+         (stats.finalClassification & 2U) != 0 ? "PACKED_SBS" : "MONO",
+         (stats.finalClassification & 2U) != 0 ? 1U : 0U);
 }
 
 void resolveInputBridge() {
@@ -865,6 +1071,67 @@ void associateLatchedSourceFrame(int64_t textureTimestamp) {
     ++g.sourcePoseMisses;
 }
 
+std::array<float, 2> mapSourceUv(float u, float v) {
+    return {{
+        g.sourceTransform[0] * u + g.sourceTransform[4] * v + g.sourceTransform[12],
+        g.sourceTransform[1] * u + g.sourceTransform[5] * v + g.sourceTransform[13],
+    }};
+}
+
+void updateSourceTransform(JNIEnv* env, jfloatArray transformArray) {
+    ++g.sourceTransformUpdates;
+    if (transformArray == nullptr || env->GetArrayLength(transformArray) != 16) {
+        if (g.sourceTransformUpdates <= 3) {
+            LOGW("SurfaceTexture transform missing/invalid on update=%u; retaining previous matrix",
+                 g.sourceTransformUpdates);
+        }
+        return;
+    }
+
+    std::array<float, 16> candidate{};
+    env->GetFloatArrayRegion(transformArray, 0, static_cast<jsize>(candidate.size()),
+                             candidate.data());
+    if (env->ExceptionCheck()) {
+        env->ExceptionClear();
+        LOGW("Unable to read SurfaceTexture transform on update=%u",
+             g.sourceTransformUpdates);
+        return;
+    }
+    if (!std::all_of(candidate.begin(), candidate.end(), [](float value) {
+            return std::isfinite(value);
+        })) {
+        LOGW("Ignoring non-finite SurfaceTexture transform on update=%u",
+             g.sourceTransformUpdates);
+        return;
+    }
+
+    const bool changed = std::memcmp(candidate.data(), g.sourceTransform.data(),
+                                     sizeof(candidate)) != 0;
+    if (changed) {
+        g.sourceTransform = candidate;
+        ++g.sourceTransformChanges;
+    }
+    if (g.sourceTransformUpdates <= 3 || (changed && g.sourceTransformChanges <= 3)) {
+        const auto bottomLeft = mapSourceUv(0.0f, 0.0f);
+        const auto topRight = mapSourceUv(1.0f, 1.0f);
+        const auto splitBottom = mapSourceUv(0.5f, 0.0f);
+        const auto splitTop = mapSourceUv(0.5f, 1.0f);
+        LOGI("SurfaceTexture transform update=%u changes=%u changed=%d "
+             "matrix=[%.5f %.5f %.5f %.5f | %.5f %.5f %.5f %.5f | "
+             "%.5f %.5f %.5f %.5f | %.5f %.5f %.5f %.5f] "
+             "mappedFull=[%.5f,%.5f -> %.5f,%.5f] "
+             "mappedSplit=[%.5f,%.5f -> %.5f,%.5f]",
+             g.sourceTransformUpdates, g.sourceTransformChanges, changed ? 1 : 0,
+             g.sourceTransform[0], g.sourceTransform[1], g.sourceTransform[2],
+             g.sourceTransform[3], g.sourceTransform[4], g.sourceTransform[5],
+             g.sourceTransform[6], g.sourceTransform[7], g.sourceTransform[8],
+             g.sourceTransform[9], g.sourceTransform[10], g.sourceTransform[11],
+             g.sourceTransform[12], g.sourceTransform[13], g.sourceTransform[14],
+             g.sourceTransform[15], bottomLeft[0], bottomLeft[1], topRight[0],
+             topRight[1], splitBottom[0], splitBottom[1], splitTop[0], splitTop[1]);
+    }
+}
+
 void publishHeadPose(XrTime displayTime, uint32_t viewCount) {
     resolveRendererBridge();
     if (g.setVrPose == nullptr || viewCount == 0) {
@@ -893,7 +1160,14 @@ void publishHeadPose(XrTime displayTime, uint32_t viewCount) {
                 position.x, position.y, position.z, static_cast<int64_t>(displayTime));
 
     ++g.posePublicationCount;
-    if (g.debugLogging && g.posePublicationCount % 300 == 0) {
+    const bool boundedSnapshot = g.posePublicationCount == 60 ||
+        g.posePublicationCount == 300 || g.posePublicationCount == 900 ||
+        g.posePublicationCount == 1800 || g.posePublicationCount == 3600 ||
+        g.posePublicationCount == 7200 || g.posePublicationCount == 18000 ||
+        g.posePublicationCount == 36000;
+    const bool boundedDebugSnapshot = g.debugLogging &&
+        g.posePublicationCount % 300 == 0 && g.posePublicationCount <= 3600;
+    if (boundedSnapshot || boundedDebugSnapshot) {
         uint32_t geometryDraws = 0;
         uint32_t rectangleDraws = 0;
         uint32_t eyeDraws = 0;
@@ -972,6 +1246,7 @@ void publishHeadPose(XrTime displayTime, uint32_t viewCount) {
              framebufferPhysicalWidth / 2, framebufferPhysicalHeight,
              framebufferScaleMilli / 1000.0f, nativeResolutionFactor,
              viewportWidth, viewportHeight, scissorWidth, scissorHeight);
+        logRendererUiStats(boundedDebugSnapshot ? "BOUNDED_DEBUG" : "BOUNDED_AUTO");
     }
 }
 
@@ -1244,43 +1519,78 @@ bool renderEye(uint32_t eye, uint32_t imageIndex, RenderContent content,
     }
     glClear(GL_COLOR_BUFFER_BIT);
 
-    if (content == RenderContent::SourceTexture && g.sourceBlitReady && g.sourceTexture != 0) {
+    const bool drawSource = content == RenderContent::SourceTexture &&
+                            g.sourceBlitReady && g.sourceTexture != 0;
+    const bool drawCalibration = content == RenderContent::StereoDiagnostic &&
+                                 g.sourceBlitReady && g.sourceTexture != 0;
+    if (drawSource || drawCalibration) {
         glUseProgram(g.program);
         glBindVertexArray(g.vertexArray);
         glActiveTexture(GL_TEXTURE0);
         glBindTexture(GL_TEXTURE_EXTERNAL_OES, g.sourceTexture);
         glUniform1i(g.sourceUniform, 0);
-
-        const bool stereo = g.stereoSourceActive;
-        const uint32_t sourceEye = stereo && g.configurationSwapEyes ? 1U - eye : eye;
-        const float uvScaleX = stereo ? 0.5f : 1.0f;
-        const float uvOffsetX = stereo ? (sourceEye == 0 ? 0.0f : 0.5f) : 0.0f;
-        glUniform4f(g.uvTransformUniform, uvScaleX, 1.0f, uvOffsetX, 0.0f);
-
+        glUniform1i(g.calibrationModeUniform, drawCalibration ? 1 : 0);
+        glUniform1i(g.calibrationEyeUniform, static_cast<GLint>(eye));
+        const float targetAspect = swapchain.height > 0
+            ? swapchain.width / static_cast<float>(swapchain.height) : 1.0f;
+        glUniform1f(g.targetAspectUniform, targetAspect);
         float scaleX = 1.0f;
         float scaleY = 1.0f;
-        if (presentationMode == PresentationMode::ImmersiveProjection) {
-            // The emulator's per-eye content is normally 4:3 while Quest's eye swapchain is
-            // close to square. Aspect-fit into the projection image so the full useful source is
-            // visible rather than stretching or cropping it to the complete eye texture.
-            const float sourceAspect = std::clamp(g.sourceContentAspect, 0.5f, 3.0f);
-            const float targetAspect = swapchain.height > 0
-                ? swapchain.width / static_cast<float>(swapchain.height) : sourceAspect;
-            if (sourceAspect > targetAspect) {
-                scaleY = targetAspect / sourceAspect;
-            } else if (sourceAspect < targetAspect) {
-                scaleX = sourceAspect / targetAspect;
+        if (drawCalibration) {
+            static constexpr std::array<float, 16> identityTransform{{
+                1.0f, 0.0f, 0.0f, 0.0f,
+                0.0f, 1.0f, 0.0f, 0.0f,
+                0.0f, 0.0f, 1.0f, 0.0f,
+                0.0f, 0.0f, 0.0f, 1.0f,
+            }};
+            glUniform4f(g.uvTransformUniform, 1.0f, 1.0f, 0.0f, 0.0f);
+            glUniformMatrix4fv(g.surfaceTransformUniform, 1, GL_FALSE,
+                               identityTransform.data());
+        } else {
+            const bool stereo = g.stereoSourceActive;
+            const uint32_t sourceEye = stereo && g.configurationSwapEyes ? 1U - eye : eye;
+            const float uvScaleX = stereo ? 0.5f : 1.0f;
+            const float uvOffsetX = stereo ? (sourceEye == 0 ? 0.0f : 0.5f) : 0.0f;
+            glUniform4f(g.uvTransformUniform, uvScaleX, 1.0f, uvOffsetX, 0.0f);
+            glUniformMatrix4fv(g.surfaceTransformUniform, 1, GL_FALSE,
+                               g.sourceTransform.data());
+
+            if (presentationMode == PresentationMode::ImmersiveProjection) {
+                // The emulator's per-eye content is normally 4:3 while Quest's eye swapchain is
+                // close to square. Aspect-fit into the projection image so the full useful source
+                // remains visible instead of being stretched or cropped to the complete eye.
+                const float sourceAspect = std::clamp(g.sourceContentAspect, 0.5f, 3.0f);
+                if (sourceAspect > targetAspect) {
+                    scaleY = targetAspect / sourceAspect;
+                } else if (sourceAspect < targetAspect) {
+                    scaleX = sourceAspect / targetAspect;
+                }
+                scaleX *= g.configurationImmersiveViewScale;
+                scaleY *= g.configurationImmersiveViewScale;
+                if (!g.immersiveScaleLogged) {
+                    LOGI("Immersive aspect fit sourceAspect=%.4f targetAspect=%.4f "
+                         "userScale=%.3f effectiveNdcScale=%.4fx%.4f sourcePerEye=%dx%d "
+                         "consumerEye=%dx%d",
+                         sourceAspect, targetAspect, g.configurationImmersiveViewScale,
+                         scaleX, scaleY,
+                         g.stereoSourceActive ? g.sourceWidth / 2 : g.sourceWidth,
+                         g.sourceHeight, swapchain.width, swapchain.height);
+                    g.immersiveScaleLogged = true;
+                }
             }
-            scaleX *= g.configurationImmersiveViewScale;
-            scaleY *= g.configurationImmersiveViewScale;
-            if (!g.immersiveScaleLogged) {
-                LOGI("Immersive aspect fit sourceAspect=%.4f targetAspect=%.4f "
-                     "userScale=%.3f effectiveNdcScale=%.4fx%.4f sourcePerEye=%dx%d "
-                     "consumerEye=%dx%d",
-                     sourceAspect, targetAspect, g.configurationImmersiveViewScale,
-                     scaleX, scaleY, g.stereoSourceActive ? g.sourceWidth / 2 : g.sourceWidth,
-                     g.sourceHeight, swapchain.width, swapchain.height);
-                g.immersiveScaleLogged = true;
+            if (shouldLogDetailedFrame()) {
+                const auto mappedStart = mapSourceUv(uvOffsetX, 0.0f);
+                const auto mappedEnd = mapSourceUv(uvOffsetX + uvScaleX, 1.0f);
+                LOGI("frame=%u OpenXR source sample destinationEye=%u sourceEye=%u "
+                     "texture=%u baseUv=[%.5f,0 -> %.5f,1] "
+                     "surfaceMappedUv=[%.5f,%.5f -> %.5f,%.5f] "
+                     "source=%dx%d perEye=%dx%d destinationViewport=[0,0 %dx%d] "
+                     "quadScale=%.5fx%.5f sourceFilter=GL_LINEAR",
+                     g.begunFrameCount, eye, sourceEye, g.sourceTexture,
+                     uvOffsetX, uvOffsetX + uvScaleX, mappedStart[0], mappedStart[1],
+                     mappedEnd[0], mappedEnd[1], g.sourceWidth, g.sourceHeight,
+                     stereo ? g.sourceWidth / 2 : g.sourceWidth, g.sourceHeight,
+                     swapchain.width, swapchain.height, scaleX, scaleY);
             }
         }
         // Cinema quads carry the content aspect in their physical dimensions, so they continue
@@ -1650,9 +1960,10 @@ Java_paulscode_android_mupen64plusae_questvr_QuestVrBridge_nativeSetSourceTextur
 
 extern "C" JNIEXPORT void JNICALL
 Java_paulscode_android_mupen64plusae_questvr_QuestVrBridge_nativeOnSourceFrameLatched(
-        JNIEnv*, jclass, jlong textureTimestamp) {
+        JNIEnv* env, jclass, jlong textureTimestamp, jfloatArray surfaceTransform) {
     ++g.sourceFrameLatchCalls;
     const int64_t previousTimestamp = g.sourceTextureTimestamp;
+    updateSourceTransform(env, surfaceTransform);
     resolveRendererBridge();
     associateLatchedSourceFrame(static_cast<int64_t>(textureTimestamp));
     if (textureTimestamp > 0 && textureTimestamp != previousTimestamp) {
@@ -1665,6 +1976,153 @@ Java_paulscode_android_mupen64plusae_questvr_QuestVrBridge_nativeOnSourceFrameLa
              static_cast<long long>(previousTimestamp), g.newSourceFrameCount, g.sourceTexture,
              g.sourceViewsValid ? 1 : 0, QuestVrDiagnostics::currentThreadId());
     }
+}
+
+extern "C" JNIEXPORT jbyteArray JNICALL
+Java_paulscode_android_mupen64plusae_questvr_QuestVrBridge_nativeCaptureSourceFrame(
+        JNIEnv* env, jclass) {
+    if (!g.sourceBlitReady || g.program == 0 || g.vertexArray == 0 ||
+            g.sourceTexture == 0 || g.sourceWidth <= 0 || g.sourceHeight <= 0 ||
+            !validateFrameEglBinding()) {
+        LOGW("Pre-OpenXR source capture unavailable: ready=%d program=%u vao=%u "
+             "source=%u size=%dx%d", g.sourceBlitReady ? 1 : 0, g.program,
+             g.vertexArray, g.sourceTexture, g.sourceWidth, g.sourceHeight);
+        return nullptr;
+    }
+
+    while (glGetError() != GL_NO_ERROR) {
+        // Ensure this one-shot diagnostic reports its own GL work only.
+    }
+
+    GLint maximumTextureSize = 0;
+    glGetIntegerv(GL_MAX_TEXTURE_SIZE, &maximumTextureSize);
+    const uint64_t byteCount64 = static_cast<uint64_t>(g.sourceWidth) *
+                                 static_cast<uint64_t>(g.sourceHeight) * 4U;
+    if (g.sourceWidth > maximumTextureSize || g.sourceHeight > maximumTextureSize ||
+            byteCount64 == 0 ||
+            byteCount64 > static_cast<uint64_t>(std::numeric_limits<jsize>::max())) {
+        LOGE("Pre-OpenXR source capture dimensions rejected: %dx%d bytes=%llu maxTexture=%d",
+             g.sourceWidth, g.sourceHeight,
+             static_cast<unsigned long long>(byteCount64), maximumTextureSize);
+        return nullptr;
+    }
+
+    GLint previousDrawFramebuffer = 0;
+    GLint previousReadFramebuffer = 0;
+    GLint previousProgram = 0;
+    GLint previousVertexArray = 0;
+    GLint previousActiveTexture = 0;
+    GLint previousExternalTexture = 0;
+    GLint previousTexture2D = 0;
+    GLint previousPackAlignment = 4;
+    GLint previousViewport[4]{};
+    GLfloat previousClearColor[4]{};
+    glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &previousDrawFramebuffer);
+    glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &previousReadFramebuffer);
+    glGetIntegerv(GL_CURRENT_PROGRAM, &previousProgram);
+    glGetIntegerv(GL_VERTEX_ARRAY_BINDING, &previousVertexArray);
+    glGetIntegerv(GL_ACTIVE_TEXTURE, &previousActiveTexture);
+    glGetIntegerv(GL_VIEWPORT, previousViewport);
+    glGetIntegerv(GL_PACK_ALIGNMENT, &previousPackAlignment);
+    glGetFloatv(GL_COLOR_CLEAR_VALUE, previousClearColor);
+    const GLboolean depthEnabled = glIsEnabled(GL_DEPTH_TEST);
+    const GLboolean cullEnabled = glIsEnabled(GL_CULL_FACE);
+    const GLboolean blendEnabled = glIsEnabled(GL_BLEND);
+    const GLboolean scissorEnabled = glIsEnabled(GL_SCISSOR_TEST);
+
+    glActiveTexture(GL_TEXTURE0);
+    glGetIntegerv(GL_TEXTURE_BINDING_EXTERNAL_OES, &previousExternalTexture);
+    glGetIntegerv(GL_TEXTURE_BINDING_2D, &previousTexture2D);
+
+    GLuint captureTexture = 0;
+    GLuint captureFramebuffer = 0;
+    glGenTextures(1, &captureTexture);
+    glBindTexture(GL_TEXTURE_2D, captureTexture);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, g.sourceWidth, g.sourceHeight, 0,
+                 GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+    glGenFramebuffers(1, &captureFramebuffer);
+    glBindFramebuffer(GL_FRAMEBUFFER, captureFramebuffer);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D,
+                           captureTexture, 0);
+
+    bool success = captureTexture != 0 && captureFramebuffer != 0 &&
+                   glCheckFramebufferStatus(GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE;
+    std::vector<uint8_t> pixels;
+    if (success) {
+        pixels.resize(static_cast<size_t>(byteCount64));
+        glViewport(0, 0, g.sourceWidth, g.sourceHeight);
+        glDisable(GL_DEPTH_TEST);
+        glDisable(GL_CULL_FACE);
+        glDisable(GL_BLEND);
+        glDisable(GL_SCISSOR_TEST);
+        glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
+        glClear(GL_COLOR_BUFFER_BIT);
+        glUseProgram(g.program);
+        glBindVertexArray(g.vertexArray);
+        glBindTexture(GL_TEXTURE_EXTERNAL_OES, g.sourceTexture);
+        glUniform1i(g.sourceUniform, 0);
+        glUniform1i(g.calibrationModeUniform, 0);
+        glUniform1i(g.calibrationEyeUniform, 0);
+        glUniform1f(g.targetAspectUniform, g.sourceHeight > 0
+            ? g.sourceWidth / static_cast<float>(g.sourceHeight) : 1.0f);
+        glUniform4f(g.uvTransformUniform, 1.0f, 1.0f, 0.0f, 0.0f);
+        glUniform2f(g.quadScaleUniform, 1.0f, 1.0f);
+        glUniformMatrix4fv(g.surfaceTransformUniform, 1, GL_FALSE,
+                           g.sourceTransform.data());
+        glDrawArrays(GL_TRIANGLES, 0, 6);
+        glPixelStorei(GL_PACK_ALIGNMENT, 1);
+        glReadPixels(0, 0, g.sourceWidth, g.sourceHeight, GL_RGBA,
+                     GL_UNSIGNED_BYTE, pixels.data());
+        success = glGetError() == GL_NO_ERROR;
+    }
+
+    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, static_cast<GLuint>(previousDrawFramebuffer));
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, static_cast<GLuint>(previousReadFramebuffer));
+    if (captureFramebuffer != 0)
+        glDeleteFramebuffers(1, &captureFramebuffer);
+    glBindTexture(GL_TEXTURE_2D, static_cast<GLuint>(previousTexture2D));
+    if (captureTexture != 0)
+        glDeleteTextures(1, &captureTexture);
+    glBindTexture(GL_TEXTURE_EXTERNAL_OES,
+                  static_cast<GLuint>(previousExternalTexture));
+    glUseProgram(static_cast<GLuint>(previousProgram));
+    glBindVertexArray(static_cast<GLuint>(previousVertexArray));
+    glActiveTexture(static_cast<GLenum>(previousActiveTexture));
+    glViewport(previousViewport[0], previousViewport[1], previousViewport[2],
+               previousViewport[3]);
+    glClearColor(previousClearColor[0], previousClearColor[1],
+                 previousClearColor[2], previousClearColor[3]);
+    glPixelStorei(GL_PACK_ALIGNMENT, previousPackAlignment);
+    if (depthEnabled) glEnable(GL_DEPTH_TEST); else glDisable(GL_DEPTH_TEST);
+    if (cullEnabled) glEnable(GL_CULL_FACE); else glDisable(GL_CULL_FACE);
+    if (blendEnabled) glEnable(GL_BLEND); else glDisable(GL_BLEND);
+    if (scissorEnabled) glEnable(GL_SCISSOR_TEST); else glDisable(GL_SCISSOR_TEST);
+
+    if (!success) {
+        LOGE("Pre-OpenXR source capture failed: source=%u size=%dx%d captureFbo=%u "
+             "captureTexture=%u", g.sourceTexture, g.sourceWidth, g.sourceHeight,
+             captureFramebuffer, captureTexture);
+        return nullptr;
+    }
+
+    jbyteArray result = env->NewByteArray(static_cast<jsize>(pixels.size()));
+    if (result == nullptr)
+        return nullptr;
+    env->SetByteArrayRegion(result, 0, static_cast<jsize>(pixels.size()),
+                            reinterpret_cast<const jbyte*>(pixels.data()));
+    if (env->ExceptionCheck())
+        return nullptr;
+    LOGI("Captured complete pre-OpenXR source texture=%u packed=%dx%d perEye=%dx%d "
+         "bytes=%zu SurfaceTextureTransformChanges=%u", g.sourceTexture,
+         g.sourceWidth, g.sourceHeight,
+         g.stereoSourceActive ? g.sourceWidth / 2 : g.sourceWidth, g.sourceHeight,
+         pixels.size(), g.sourceTransformChanges);
+    logRendererUiStats("SOURCE_CAPTURE");
+    return result;
 }
 
 extern "C" JNIEXPORT void JNICALL

@@ -56,6 +56,8 @@ void UnbufferedDrawer::drawTriangles(const graphics::Context::DrawTriangleParame
 	const bool screenSpaceGeometry =
 		modifiedPositionVertices == _params.verticesCount;
 	const bool transformGeometry = !screenSpaceGeometry;
+	if (screenSpaceGeometry)
+		QuestVr::noteScreenSpaceBatch(_params.verticesCount);
 
 	{
 		m_cachedAttribArray->enableVertexAttribArray(triangleAttrib::position, true);

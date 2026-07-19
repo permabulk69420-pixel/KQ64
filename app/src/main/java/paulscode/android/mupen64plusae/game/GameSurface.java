@@ -772,6 +772,7 @@ public class GameSurface extends SurfaceView implements SurfaceHolder.Callback
         private long mProducerCallbackCount = 0;
         private long mNewLatchedFrameCount = 0;
         private long mLastTextureTimestamp = 0;
+        private final float[] mSourceTransformMatrix = new float[16];
 
         /**
          * Constructor.
@@ -913,6 +914,7 @@ public class GameSurface extends SurfaceView implements SurfaceHolder.Callback
             ++mProducerCallbackCount;
             if (mQuestVrActive) {
                 final long textureTimestamp = mShaderDrawer.updateSourceTexture();
+                mShaderDrawer.copySourceTransformMatrix(mSourceTransformMatrix);
                 if (textureTimestamp > 0 && textureTimestamp != mLastTextureTimestamp) {
                     ++mNewLatchedFrameCount;
                     mLastTextureTimestamp = textureTimestamp;
@@ -923,7 +925,7 @@ public class GameSurface extends SurfaceView implements SurfaceHolder.Callback
                             " newLatchedFrames=" + mNewLatchedFrameCount +
                             " externalTexture=" + mShaderDrawer.getSourceTextureId());
                 }
-                QuestVrBridge.onSourceFrameLatched(textureTimestamp);
+                QuestVrBridge.onSourceFrameLatched(textureTimestamp, mSourceTransformMatrix);
             } else {
                 mShaderDrawer.onDrawFrame();
                 flipBuffers();
@@ -1001,7 +1003,9 @@ public class GameSurface extends SurfaceView implements SurfaceHolder.Callback
         private void takeScreenshot(RenderHandler.ScreenShotRequest screenShotRequest) {
             Log.i(TAG, "Renderthread -- takeScreenshot: " + screenShotRequest.mFilename);
 
-            Bitmap screenshotMirrored = mShaderDrawer.getScreenShot();
+            Bitmap screenshotMirrored = mQuestVrActive
+                    ? QuestVrBridge.captureSourceFrame()
+                    : mShaderDrawer.getScreenShot();
 
             if (screenshotMirrored == null) {
                 //Something bad happened, don't save the screenshot

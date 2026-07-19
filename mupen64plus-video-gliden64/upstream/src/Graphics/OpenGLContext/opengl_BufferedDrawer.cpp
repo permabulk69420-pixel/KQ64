@@ -214,6 +214,8 @@ void BufferedDrawer::drawTriangles(const graphics::Context::DrawTriangleParamete
 	const bool screenSpaceGeometry =
 		modifiedPositionVertices == _params.verticesCount;
 	const bool transformGeometry = !screenSpaceGeometry;
+	if (screenSpaceGeometry)
+		QuestVr::noteScreenSpaceBatch(_params.verticesCount);
 
 	_updateTrianglesBuffers(_params);
 

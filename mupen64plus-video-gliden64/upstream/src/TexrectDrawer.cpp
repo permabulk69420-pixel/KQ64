@@ -88,6 +88,8 @@ void TexrectDrawer::init()
 	m_programTex.reset(gfxContext.createTexrectDrawerDrawShader());
 	m_programClear.reset(gfxContext.createTexrectDrawerClearShader());
 	m_programTex->setTextureSize(m_pTexture->width, m_pTexture->height);
+	QuestVr::noteTexrectScratchTarget(u32(m_FBO), u32(m_pTexture->name),
+		m_pTexture->width, m_pTexture->height);
 
 	m_vecRectCoords.reserve(256);
 }
@@ -342,6 +344,9 @@ bool TexrectDrawer::draw()
 {
 	if (m_numRects == 0)
 		return false;
+	QuestVr::noteTexrectScratchTarget(u32(m_FBO), u32(m_pTexture->name),
+		m_pTexture->width, m_pTexture->height);
+	QuestVr::noteTexrectScratchDraw(m_numRects);
 
 	ValueKeeper<u64> otherMode(gDP.otherMode._u64, m_otherMode);
 	ValueKeeper<gDPScissor> scissor(gDP.scissor, m_scissor);

@@ -21,6 +21,12 @@ public class ShaderDrawer {
     private final ArrayList<ArrayList<Shader>> mShaderPasses = new ArrayList<>();
     private int mWidth = 0;
     private int mHeight = 0;
+    private final float[] mSurfaceTransformMatrix = {
+            1.0f, 0.0f, 0.0f, 0.0f,
+            0.0f, 1.0f, 0.0f, 0.0f,
+            0.0f, 0.0f, 1.0f, 0.0f,
+            0.0f, 0.0f, 0.0f, 1.0f
+    };
 
     public ShaderDrawer(Context context, ArrayList<ShaderLoader> selectedShaders) {
         ShaderLoader.loadShaders(context);
@@ -86,6 +92,7 @@ public class ShaderDrawer {
             // changes or if the app is put on the background then foreground again
             try {
                 mGameTexture.updateTexImage();
+                mGameTexture.getTransformMatrix(mSurfaceTransformMatrix);
             } catch (RuntimeException e) {
                 QuestVrDiagnostics.error(TAG, "Initial SurfaceTexture.updateTexImage failed", e);
             }
@@ -155,12 +162,22 @@ public class ShaderDrawer {
         if (mGameTexture != null) {
             try {
                 mGameTexture.updateTexImage();
+                mGameTexture.getTransformMatrix(mSurfaceTransformMatrix);
                 return mGameTexture.getTimestamp();
             } catch (RuntimeException e) {
                 QuestVrDiagnostics.error(TAG, "SurfaceTexture.updateTexImage failed", e);
             }
         }
         return 0;
+    }
+
+    /** Copy the crop/flip transform belonging to the most recently latched buffer. */
+    public void copySourceTransformMatrix(float[] destination) {
+        if (destination == null || destination.length < mSurfaceTransformMatrix.length) {
+            throw new IllegalArgumentException("SurfaceTexture matrix destination must have 16 elements");
+        }
+        System.arraycopy(mSurfaceTransformMatrix, 0, destination, 0,
+                mSurfaceTransformMatrix.length);
     }
 
     public Bitmap getScreenShot() {

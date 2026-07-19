@@ -2,10 +2,12 @@ package paulscode.android.mupen64plusae.questvr;
 
 import android.app.Activity;
 import android.content.Context;
+import android.graphics.Bitmap;
 import android.os.SystemClock;
 import android.view.View;
 
 import java.io.File;
+import java.nio.ByteBuffer;
 
 /**
  * Thin Java owner for the optional OpenXR presentation path.
@@ -20,6 +22,8 @@ public final class QuestVrBridge {
     private static boolean sLibraryLoaded;
     private static volatile boolean sPresentationLifecycleOwned;
     private static boolean sSourceTextureLogged;
+    private static int sSourceWidth;
+    private static int sSourceHeight;
 
     static {
         try {
@@ -156,13 +160,46 @@ public final class QuestVrBridge {
                 sSourceTextureLogged = true;
             }
             nativeSetSourceTexture(texture, width, height, requestStereo, contentAspect);
+            sSourceWidth = texture != 0 ? width : 0;
+            sSourceHeight = texture != 0 ? height : 0;
         }
     }
 
-    public static void onSourceFrameLatched(long textureTimestampNanos) {
+    public static void onSourceFrameLatched(long textureTimestampNanos,
+            float[] surfaceTransformMatrix) {
         if (sLibraryLoaded) {
-            nativeOnSourceFrameLatched(textureTimestampNanos);
+            nativeOnSourceFrameLatched(textureTimestampNanos, surfaceTransformMatrix);
         }
+    }
+
+    /**
+     * Capture the complete SurfaceTexture image before OpenXR eye splitting and aspect fitting.
+     * This is deliberately user-triggered through the existing screenshot action, so it cannot
+     * generate an unbounded stream of large diagnostic files.
+     */
+    public static Bitmap captureSourceFrame() {
+        if (!sLibraryLoaded || sSourceWidth <= 0 || sSourceHeight <= 0) {
+            return null;
+        }
+        final byte[] rgba = nativeCaptureSourceFrame();
+        final long expectedSize = (long) sSourceWidth * sSourceHeight * 4L;
+        if (rgba == null || expectedSize > Integer.MAX_VALUE || rgba.length != expectedSize) {
+            QuestVrDiagnostics.warn(TAG, "Pre-OpenXR source capture failed or had an " +
+                    "unexpected size: expected=" + expectedSize + " actual=" +
+                    (rgba == null ? -1 : rgba.length));
+            return null;
+        }
+        // GLideN64 often leaves the Android surface alpha channel unset. The source is composed
+        // opaquely in OpenXR, so make the saved PNG represent what the headset actually sees.
+        for (int index = 3; index < rgba.length; index += 4) {
+            rgba[index] = (byte) 0xFF;
+        }
+        final Bitmap bitmap = Bitmap.createBitmap(sSourceWidth, sSourceHeight,
+                Bitmap.Config.ARGB_8888);
+        bitmap.copyPixelsFromBuffer(ByteBuffer.wrap(rgba));
+        QuestVrDiagnostics.info(TAG, "Captured pre-OpenXR packed source " +
+                sSourceWidth + "x" + sSourceHeight);
+        return bitmap;
     }
 
     public static void configure(QuestVrSettings.Configuration configuration) {
@@ -224,6 +261,8 @@ public final class QuestVrBridge {
                 }
                 sPresentationLifecycleOwned = false;
                 sSourceTextureLogged = false;
+                sSourceWidth = 0;
+                sSourceHeight = 0;
             }
         }
     }
@@ -235,7 +274,9 @@ public final class QuestVrBridge {
     private static native boolean nativeInitialize(Activity activity);
     private static native void nativeSetSourceTexture(int texture, int width, int height,
             boolean requestStereo, float contentAspect);
-    private static native void nativeOnSourceFrameLatched(long textureTimestampNanos);
+    private static native void nativeOnSourceFrameLatched(long textureTimestampNanos,
+            float[] surfaceTransformMatrix);
+    private static native byte[] nativeCaptureSourceFrame();
     private static native void nativeConfigure(boolean stereoEnabled, boolean swapEyes, float ipdMeters,
             int presentationMode, float immersiveViewScale,
             float screenScale, float screenDistanceMeters, boolean startupProofLayers,

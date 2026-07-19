@@ -1,5 +1,43 @@
 # Quest VR Mario Kart camera and internal-resolution audit
 
+## Menu/HUD hardware follow-up after `31c9b7a`
+
+The `31c9b7a` Quest test did not include a new diagnostic log, so the headset observations are the
+authority for this follow-up. The race world remained the closest path to working, while menus
+showed roughly half of the expected 4:3 image and fully modified screen-space HUD elements still
+did not fuse.
+
+Source inspection proves two independent implementation faults:
+
+1. The final packed framebuffer copy supplied the physical 2688-pixel SBS width as a logical
+   source rectangle while supplying the 1344-pixel per-eye width as the destination coordinate
+   space. At 2688x1008 this generated a destination of `[-672, 2016]`. `BlitScope` then performed
+   its normal eye mapping, so both source and destination were effectively split a second time.
+   This matches the enlarged, cropped, overlapping, and transition-offset menu symptoms.
+2. Fully modified triangle batches were correctly classified as screen-space, and the OpenXR FOV
+   correction matrix was uploaded. All three triangle vertex shaders nevertheless applied that
+   matrix only when `aModify.x == 0`. `drawScreenSpaceTriangle` sets `aModify` for every vertex, so
+   the correction was unreachable and the lack of hardware change was expected.
+
+The corrected presentation uses 1344 logical pixels for both sides of the final per-eye copy and
+lets `BlitScope` perform exactly one physical SBS mapping. A separate screen-space-transform
+uniform applies the HUD correction after modified vertices have been converted to clip space;
+perspective world transforms retain their previous ordering and path.
+
+The existing screenshot action now captures the complete external-OES producer image before eye
+selection, aspect fitting, and OpenXR submission. It applies Android's actual `SurfaceTexture`
+matrix and writes one bounded PNG. On character select, each 1344x1008 half should contain all
+eight characters. If it does but the headset does not, the remaining fault is in OpenXR sampling;
+if either half contains only four, the remaining fault is still in GLideN64.
+
+Bounded persistent snapshots record the screen-space framebuffer/program/uniform mask, eye draw
+and correction counts, actual NDC offsets, texrect scratch target (normally 640x580), final
+physical/logical copy rectangles and filter, SurfaceTexture matrix/corners, per-eye UV region,
+swapchain viewport, and `XrSwapchainSubImage`. Enabling **Show startup proof layers** also displays
+an optional red/blue calibration pattern with a full border, centre lines, an aspect-correct square
+and circle, and left/right edge marks. These are diagnostics only; the option remains off by
+default.
+
 ## Hardware evidence
 
 The checked-in `quest-vr-diagnostic-latest.log` is a Quest 3S run of the immersive-projection

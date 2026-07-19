@@ -40,8 +40,18 @@ void setScissorEnabled(bool enabled);
 void resetGraphicsState();
 void markFramePresented();
 void noteGeometryVertices(unsigned int totalVertices, unsigned int modifiedPositionVertices);
+void noteScreenSpaceBatch(unsigned int vertices);
 void noteBackgroundRectangle();
 void noteSprite2D();
+void noteTexrectScratchTarget(unsigned int framebuffer, unsigned int texture,
+	unsigned int width, unsigned int height);
+void noteTexrectScratchDraw(unsigned int rectangles);
+void noteFinalFramebufferBlit(unsigned int readFramebuffer, unsigned int texture,
+	unsigned int physicalSourceWidth, unsigned int logicalSourceWidth,
+	unsigned int sourceHeight, unsigned int physicalDestinationWidth,
+	unsigned int logicalDestinationWidth, unsigned int destinationHeight,
+	int sourceX0, int sourceX1, int destinationX0, int destinationX1,
+	unsigned int filter);
 
 /**
  * Maps framebuffer copies according to each target independently. Packed

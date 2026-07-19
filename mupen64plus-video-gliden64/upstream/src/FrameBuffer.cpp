@@ -1091,9 +1091,16 @@ void FrameBufferList::_renderScreenSizeBuffer()
 		pFilteredBuffer = f(postProcessor, pFilteredBuffer);
 	CachedTexture * pBufferTexture = pFilteredBuffer->m_pTexture;
 
-	const u32 wndWidth = wnd.getWidth();
+	const u32 physicalWndWidth = wnd.getWidth();
 	const u32 wndHeight = wnd.getHeight();
-	s32 srcCoord[4] = { 0, 0, static_cast<s32>(wndWidth), static_cast<s32>(wndHeight) };
+	// Packed framebuffer objects use per-eye logical X coordinates. BlitScope
+	// performs the one and only mapping from those coordinates into each physical
+	// SBS half. Passing the packed width here causes it to split an already split
+	// image, cropping and enlarging full-screen menus.
+	const u32 logicalWndWidth = QuestVr::isStereoEnabled()
+		? std::max(1U, physicalWndWidth / 2U) : physicalWndWidth;
+	s32 srcCoord[4] = { 0, 0, static_cast<s32>(logicalWndWidth),
+		static_cast<s32>(wndHeight) };
 
 	const u32 physicalScreenWidth = wnd.getScreenWidth();
 	// Destination coordinates are logical per-eye coordinates. BlitScope maps
@@ -1102,9 +1109,13 @@ void FrameBufferList::_renderScreenSizeBuffer()
 		? std::max(1U, physicalScreenWidth / 2U) : physicalScreenWidth;
 	const u32 screenHeight = wnd.getScreenHeight();
 	const u32 wndHeightOffset = wnd.getHeightOffset();
-	const s32 hOffset = (screenWidth - wndWidth) / 2;
-	const s32 vOffset = (screenHeight - wndHeight) / 2 + wndHeightOffset;
-	s32 dstCoord[4] = { hOffset, vOffset, hOffset + static_cast<s32>(wndWidth), vOffset + static_cast<s32>(wndHeight) };
+	const s32 hOffset = (static_cast<s32>(screenWidth) -
+		static_cast<s32>(logicalWndWidth)) / 2;
+	const s32 vOffset = (static_cast<s32>(screenHeight) -
+		static_cast<s32>(wndHeight)) / 2 + static_cast<s32>(wndHeightOffset);
+	s32 dstCoord[4] = { hOffset, vOffset,
+		hOffset + static_cast<s32>(logicalWndWidth),
+		vOffset + static_cast<s32>(wndHeight) };
 
 	gfxContext.bindFramebuffer(bufferTarget::DRAW_FRAMEBUFFER, ObjectHandle::defaultFramebuffer);
 
@@ -1115,7 +1126,7 @@ void FrameBufferList::_renderScreenSizeBuffer()
 	blitParams.srcY0 = srcCoord[3];
 	blitParams.srcX1 = srcCoord[2];
 	blitParams.srcY1 = srcCoord[1];
-	blitParams.srcWidth = wndWidth;
+	blitParams.srcWidth = logicalWndWidth;
 	blitParams.srcHeight = wndHeight;
 	blitParams.dstX0 = dstCoord[0];
 	blitParams.dstY0 = dstCoord[1];
@@ -1123,7 +1134,10 @@ void FrameBufferList::_renderScreenSizeBuffer()
 	blitParams.dstY1 = dstCoord[3];
 	blitParams.dstWidth = screenWidth;
 	blitParams.dstHeight = screenHeight + wndHeightOffset;
-	const bool downscale = blitParams.srcWidth >= blitParams.dstWidth || blitParams.srcHeight >= blitParams.dstHeight;
+	// A same-size packed-to-packed presentation is a direct pixel mapping, not a
+	// downscale. Avoid an unnecessary linear sample that softens native UI edges.
+	const bool downscale = blitParams.srcWidth > blitParams.dstWidth ||
+		blitParams.srcHeight > blitParams.dstHeight;
 	blitParams.filter = downscale || config.generalEmulation.enableHybridFilter > 0 ?
 		textureParameters::FILTER_LINEAR :
 		textureParameters::FILTER_NEAREST; //upscale; hybridFilter disabled
@@ -1132,6 +1146,11 @@ void FrameBufferList::_renderScreenSizeBuffer()
 	blitParams.combiner = downscale ? CombinerInfo::get().getTexrectDownscaleCopyProgram() :
 		CombinerInfo::get().getTexrectUpscaleCopyProgram();
 	blitParams.readBuffer = pFilteredBuffer->m_FBO;
+	QuestVr::noteFinalFramebufferBlit(u32(pFilteredBuffer->m_FBO),
+		u32(pBufferTexture->name), physicalWndWidth, logicalWndWidth, wndHeight,
+		physicalScreenWidth, screenWidth, screenHeight + wndHeightOffset,
+		blitParams.srcX0, blitParams.srcX1, blitParams.dstX0, blitParams.dstX1,
+		u32(blitParams.filter));
 
 	drawer.blitOrCopyTexturedRect(blitParams);
 
