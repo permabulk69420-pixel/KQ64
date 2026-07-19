@@ -641,6 +641,24 @@ int getFramebufferWidth(GLuint framebuffer)
 	return resource->second.width;
 }
 
+bool isPackedFramebuffer(GLuint framebuffer)
+{
+	if (framebuffer == 0)
+		return s_enabled.load(std::memory_order_acquire) &&
+			s_stereoEnabled.load(std::memory_order_relaxed);
+
+	const auto target = s_framebufferTargets.find(framebuffer);
+	if (target == s_framebufferTargets.end() || target->second.renderbuffer)
+		return false;
+	return s_packedFramebufferTextures.count(target->second.resource) != 0;
+}
+
+int getFramebufferCoordinateWidth(GLuint framebuffer, int physicalWidth)
+{
+	return isPackedFramebuffer(framebuffer)
+		? std::max(1, physicalWidth / 2) : physicalWidth;
+}
+
 int getDrawTargetWidth()
 {
 	int width = getFramebufferWidth(s_drawFramebuffer);
@@ -655,21 +673,20 @@ int getDrawTargetWidth()
 
 int getDrawCoordinateWidth(int targetWidth)
 {
+	// Direct draws to the Android/default surface historically provide physical
+	// SBS viewport coordinates. GLideN64 framebuffer objects provide per-eye
+	// logical coordinates and are explicitly marked as packed.
 	if (s_drawFramebuffer == 0)
 		return targetWidth;
-	const auto target = s_framebufferTargets.find(s_drawFramebuffer);
-	if (target == s_framebufferTargets.end() || target->second.renderbuffer)
-		return targetWidth;
-	return s_packedFramebufferTextures.count(target->second.resource) != 0
-		? std::max(1, targetWidth / 2) : targetWidth;
+	return getFramebufferCoordinateWidth(s_drawFramebuffer, targetWidth);
 }
 
-int mapEyeCoordinate(int value, int targetWidth, unsigned int eye)
+int mapEyeCoordinate(int value, int physicalWidth, int coordinateWidth, unsigned int eye)
 {
-	const int leftWidth = targetWidth / 2;
+	const int leftWidth = physicalWidth / 2;
 	const int eyeOrigin = eye == 0 ? 0 : leftWidth;
-	const int eyeWidth = eye == 0 ? leftWidth : targetWidth - leftWidth;
-	return mapCoordinate(value, 0, targetWidth, eyeOrigin, eyeWidth);
+	const int eyeWidth = eye == 0 ? leftWidth : physicalWidth - leftWidth;
+	return mapCoordinate(value, 0, coordinateWidth, eyeOrigin, eyeWidth);
 }
 
 } // namespace
@@ -902,10 +919,18 @@ void noteSprite2D()
 
 BlitScope::BlitScope(unsigned int readFramebuffer, unsigned int drawFramebuffer)
 	: m_active(isStereoEnabled())
+	, m_sourcePacked(isPackedFramebuffer(readFramebuffer))
+	, m_destinationPacked(isPackedFramebuffer(drawFramebuffer))
 	, m_sourceWidth(getFramebufferWidth(readFramebuffer))
 	, m_destinationWidth(getFramebufferWidth(drawFramebuffer))
+	, m_sourceCoordinateWidth(getFramebufferCoordinateWidth(readFramebuffer, m_sourceWidth))
+	, m_destinationCoordinateWidth(getFramebufferCoordinateWidth(drawFramebuffer,
+		m_destinationWidth))
 {
-	m_active = m_active && m_sourceWidth >= 2 && m_destinationWidth >= 2;
+	// Stereo duplication is driven by the destination. A mono source is sampled
+	// unchanged for both eyes; a packed source selects the corresponding eye.
+	m_active = m_active && m_destinationPacked && m_destinationWidth >= 2 &&
+		m_sourceWidth > 0;
 	if (m_active)
 		s_framebufferBlits.fetch_add(1, std::memory_order_relaxed);
 }
@@ -917,16 +942,21 @@ unsigned int BlitScope::eyeCount() const
 
 int BlitScope::mapSourceX(int value, unsigned int eye) const
 {
-	return m_active ? mapEyeCoordinate(value, m_sourceWidth, eye) : value;
+	return m_active && m_sourcePacked
+		? mapEyeCoordinate(value, m_sourceWidth, m_sourceCoordinateWidth, eye)
+		: value;
 }
 
 int BlitScope::mapDestinationX(int value, unsigned int eye) const
 {
-	return m_active ? mapEyeCoordinate(value, m_destinationWidth, eye) : value;
+	return m_active && m_destinationPacked
+		? mapEyeCoordinate(value, m_destinationWidth, m_destinationCoordinateWidth, eye)
+		: value;
 }
 
 DrawScope::DrawScope(bool transformGeometry)
-	: m_active(isStereoEnabled() && s_viewport.width >= 2 && s_viewport.height > 0)
+	: m_active(isStereoEnabled() && isPackedFramebuffer(s_drawFramebuffer) &&
+		s_viewport.width >= 2 && s_viewport.height > 0)
 	, m_transformGeometry(transformGeometry)
 	, m_targetWidth(getDrawTargetWidth())
 	, m_coordinateWidth(getDrawCoordinateWidth(m_targetWidth))

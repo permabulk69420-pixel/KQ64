@@ -44,9 +44,10 @@ void noteBackgroundRectangle();
 void noteSprite2D();
 
 /**
- * Maps an emulator-logical framebuffer blit into the packed left/right halves
- * of both source and destination targets. A non-stereo or untracked target is
- * left as one ordinary blit.
+ * Maps framebuffer copies according to each target independently. Packed
+ * sources select the matching eye half, mono sources are reused unchanged,
+ * and packed destinations receive one copy per eye. Mono destinations remain
+ * one ordinary copy.
  */
 class BlitScope {
 public:
@@ -58,8 +59,12 @@ public:
 
 private:
 	bool m_active;
+	bool m_sourcePacked;
+	bool m_destinationPacked;
 	int m_sourceWidth;
 	int m_destinationWidth;
+	int m_sourceCoordinateWidth;
+	int m_destinationCoordinateWidth;
 };
 
 /**

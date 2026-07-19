@@ -81,13 +81,6 @@ void TexrectDrawer::init()
 	bufTarget.textureHandle = m_pTexture->name;
 	gfxContext.addFrameBufferRenderTarget(bufTarget);
 
-	// This fixed-size texture is a mono staging surface. Quest VR normally splits
-	// tracked draw targets into two eye regions, which would pack this scratch image
-	// once here and then pack it again when copied to the real stereo framebuffer.
-	// Override only the VR tracker's dimensions; the actual GL texture remains 640x580.
-	QuestVr::registerTexture(static_cast<unsigned int>(m_pTexture->name), 1,
-		static_cast<int>(m_pTexture->height));
-
 	// check if everything is OK
 	assert(!gfxContext.isFramebufferError());
 	gfxContext.bindFramebuffer(bufferTarget::DRAW_FRAMEBUFFER, ObjectHandle::defaultFramebuffer);

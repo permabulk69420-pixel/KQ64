@@ -1095,7 +1095,11 @@ void FrameBufferList::_renderScreenSizeBuffer()
 	const u32 wndHeight = wnd.getHeight();
 	s32 srcCoord[4] = { 0, 0, static_cast<s32>(wndWidth), static_cast<s32>(wndHeight) };
 
-	const u32 screenWidth = wnd.getScreenWidth();
+	const u32 physicalScreenWidth = wnd.getScreenWidth();
+	// Destination coordinates are logical per-eye coordinates. BlitScope maps
+	// them into the physical left/right halves of the Android SBS surface.
+	const u32 screenWidth = QuestVr::isStereoEnabled()
+		? std::max(1U, physicalScreenWidth / 2U) : physicalScreenWidth;
 	const u32 screenHeight = wnd.getScreenHeight();
 	const u32 wndHeightOffset = wnd.getHeightOffset();
 	const s32 hOffset = (screenWidth - wndWidth) / 2;
