@@ -1,0 +1,176 @@
+diff --git a/mupen64plus-video-gliden64/upstream/src/QuestVr.h b/mupen64plus-video-gliden64/upstream/src/QuestVr.h
+index 07041f3..0000000 100644
+--- a/mupen64plus-video-gliden64/upstream/src/QuestVr.h
++++ b/mupen64plus-video-gliden64/upstream/src/QuestVr.h
+@@ -46,9 +46,10 @@ void noteBackgroundRectangle();
+ void noteSprite2D();
+ 
+ /**
+- * Maps an emulator-logical framebuffer blit into the packed left/right halves
+- * of both source and destination targets. A non-stereo or untracked target is
+- * left as one ordinary blit.
++ * Maps framebuffer copies according to each target independently. Packed
++ * sources select the matching eye half, mono sources are reused unchanged,
++ * and packed destinations receive one copy per eye. Mono destinations remain
++ * one ordinary copy.
+  */
+ class BlitScope {
+ public:
+@@ -59,9 +60,13 @@ public:
+ 	int mapDestinationX(int value, unsigned int eye) const;
+ 
+ private:
+ 	bool m_active;
++	bool m_sourcePacked;
++	bool m_destinationPacked;
+ 	int m_sourceWidth;
+ 	int m_destinationWidth;
++	int m_sourceCoordinateWidth;
++	int m_destinationCoordinateWidth;
+ };
+ 
+ /**
+diff --git a/mupen64plus-video-gliden64/upstream/src/QuestVr.cpp b/mupen64plus-video-gliden64/upstream/src/QuestVr.cpp
+index caaef03..0000000 100644
+--- a/mupen64plus-video-gliden64/upstream/src/QuestVr.cpp
++++ b/mupen64plus-video-gliden64/upstream/src/QuestVr.cpp
+@@ -639,6 +639,27 @@ int getFramebufferWidth(GLuint framebuffer)
+ 	return resource->second.width;
+ }
+ 
++bool isPackedFramebuffer(GLuint framebuffer)
++{
++	if (framebuffer == 0)
++		return s_enabled.load(std::memory_order_acquire) &&
++			s_stereoEnabled.load(std::memory_order_relaxed);
++
++	const auto target = s_framebufferTargets.find(framebuffer);
++	if (target == s_framebufferTargets.end() || target->second.renderbuffer)
++		return false;
++	return s_packedFramebufferTextures.count(target->second.resource) != 0;
++}
++
++int getFramebufferCoordinateWidth(GLuint framebuffer, int physicalWidth)
++{
++	return isPackedFramebuffer(framebuffer)
++		? std::max(1, physicalWidth / 2) : physicalWidth;
++}
++
+ int getDrawTargetWidth()
+ {
+ 	int width = getFramebufferWidth(s_drawFramebuffer);
+@@ -655,19 +676,20 @@ int getDrawTargetWidth()
+ 
+ int getDrawCoordinateWidth(int targetWidth)
+ {
++	// Direct draws to the Android/default surface historically provide physical
++	// SBS viewport coordinates. GLideN64 framebuffer objects provide per-eye
++	// logical coordinates and are explicitly marked as packed.
+ 	if (s_drawFramebuffer == 0)
+ 		return targetWidth;
+-	const auto target = s_framebufferTargets.find(s_drawFramebuffer);
+-	if (target == s_framebufferTargets.end() || target->second.renderbuffer)
+-		return targetWidth;
+-	return s_packedFramebufferTextures.count(target->second.resource) != 0
+-		? std::max(1, targetWidth / 2) : targetWidth;
++	return getFramebufferCoordinateWidth(s_drawFramebuffer, targetWidth);
+ }
+ 
+-int mapEyeCoordinate(int value, int targetWidth, unsigned int eye)
++int mapEyeCoordinate(int value, int physicalWidth, int coordinateWidth, unsigned int eye)
+ {
+-	const int leftWidth = targetWidth / 2;
++	const int leftWidth = physicalWidth / 2;
+ 	const int eyeOrigin = eye == 0 ? 0 : leftWidth;
+-	const int eyeWidth = eye == 0 ? leftWidth : targetWidth - leftWidth;
+-	return mapCoordinate(value, 0, targetWidth, eyeOrigin, eyeWidth);
++	const int eyeWidth = eye == 0 ? leftWidth : physicalWidth - leftWidth;
++	return mapCoordinate(value, 0, coordinateWidth, eyeOrigin, eyeWidth);
+ }
+ 
+ } // namespace
+@@ -882,29 +904,43 @@ void noteSprite2D()
+ 
+ BlitScope::BlitScope(unsigned int readFramebuffer, unsigned int drawFramebuffer)
+ 	: m_active(isStereoEnabled())
++	, m_sourcePacked(isPackedFramebuffer(readFramebuffer))
++	, m_destinationPacked(isPackedFramebuffer(drawFramebuffer))
+ 	, m_sourceWidth(getFramebufferWidth(readFramebuffer))
+ 	, m_destinationWidth(getFramebufferWidth(drawFramebuffer))
++	, m_sourceCoordinateWidth(getFramebufferCoordinateWidth(readFramebuffer, m_sourceWidth))
++	, m_destinationCoordinateWidth(getFramebufferCoordinateWidth(drawFramebuffer,
++		m_destinationWidth))
+ {
+-	m_active = m_active && m_sourceWidth >= 2 && m_destinationWidth >= 2;
++	// Stereo duplication is driven by the destination. A mono source is sampled
++	// unchanged for both eyes; a packed source selects the corresponding eye.
++	m_active = m_active && m_destinationPacked && m_destinationWidth >= 2 &&
++		m_sourceWidth > 0;
+ 	if (m_active)
+ 		s_framebufferBlits.fetch_add(1, std::memory_order_relaxed);
+ }
+@@ -917,12 +953,16 @@ unsigned int BlitScope::eyeCount() const
+ 
+ int BlitScope::mapSourceX(int value, unsigned int eye) const
+ {
+-	return m_active ? mapEyeCoordinate(value, m_sourceWidth, eye) : value;
++	return m_active && m_sourcePacked
++		? mapEyeCoordinate(value, m_sourceWidth, m_sourceCoordinateWidth, eye)
++		: value;
+ }
+ 
+ int BlitScope::mapDestinationX(int value, unsigned int eye) const
+ {
+-	return m_active ? mapEyeCoordinate(value, m_destinationWidth, eye) : value;
++	return m_active && m_destinationPacked
++		? mapEyeCoordinate(value, m_destinationWidth, m_destinationCoordinateWidth, eye)
++		: value;
+ }
+ 
+ DrawScope::DrawScope(bool transformGeometry)
+-	: m_active(isStereoEnabled() && s_viewport.width >= 2 && s_viewport.height > 0)
++	: m_active(isStereoEnabled() && isPackedFramebuffer(s_drawFramebuffer) &&
++		s_viewport.width >= 2 && s_viewport.height > 0)
+ 	, m_transformGeometry(transformGeometry)
+ 	, m_targetWidth(getDrawTargetWidth())
+ 	, m_coordinateWidth(getDrawCoordinateWidth(m_targetWidth))
+diff --git a/mupen64plus-video-gliden64/upstream/src/TexrectDrawer.cpp b/mupen64plus-video-gliden64/upstream/src/TexrectDrawer.cpp
+index ee6f94c..0000000 100644
+--- a/mupen64plus-video-gliden64/upstream/src/TexrectDrawer.cpp
++++ b/mupen64plus-video-gliden64/upstream/src/TexrectDrawer.cpp
+@@ -66,13 +66,6 @@ void TexrectDrawer::init()
+ 	bufTarget.textureHandle = m_pTexture->name;
+ 	gfxContext.addFrameBufferRenderTarget(bufTarget);
+ 
+-	// This fixed-size texture is a mono staging surface. Quest VR normally splits
+-	// tracked draw targets into two eye regions, which would pack this scratch image
+-	// once here and then pack it again when copied to the real stereo framebuffer.
+-	// Override only the VR tracker's dimensions; the actual GL texture remains 640x580.
+-	QuestVr::registerTexture(static_cast<unsigned int>(m_pTexture->name), 1,
+-		static_cast<int>(m_pTexture->height));
+-
+ 	// check if everything is OK
+ 	assert(!gfxContext.isFramebufferError());
+ 	gfxContext.bindFramebuffer(bufferTarget::DRAW_FRAMEBUFFER, ObjectHandle::defaultFramebuffer);
+diff --git a/mupen64plus-video-gliden64/upstream/src/FrameBuffer.cpp b/mupen64plus-video-gliden64/upstream/src/FrameBuffer.cpp
+index f76c07f..0000000 100644
+--- a/mupen64plus-video-gliden64/upstream/src/FrameBuffer.cpp
++++ b/mupen64plus-video-gliden64/upstream/src/FrameBuffer.cpp
+@@ -1058,13 +1058,17 @@ void FrameBufferList::_renderScreenSizeBuffer()
+ 	CachedTexture * pBufferTexture = pFilteredBuffer->m_pTexture;
+ 
+ 	const u32 wndWidth = wnd.getWidth();
+ 	const u32 wndHeight = wnd.getHeight();
+ 	s32 srcCoord[4] = { 0, 0, static_cast<s32>(wndWidth), static_cast<s32>(wndHeight) };
+ 
+-	const u32 screenWidth = wnd.getScreenWidth();
++	const u32 physicalScreenWidth = wnd.getScreenWidth();
++	// Destination coordinates are logical per-eye coordinates. BlitScope maps
++	// them into the physical left/right halves of the Android SBS surface.
++	const u32 screenWidth = QuestVr::isStereoEnabled()
++		? std::max(1U, physicalScreenWidth / 2U) : physicalScreenWidth;
+ 	const u32 screenHeight = wnd.getScreenHeight();
+ 	const u32 wndHeightOffset = wnd.getHeightOffset();
+ 	const s32 hOffset = (screenWidth - wndWidth) / 2;
+ 	const s32 vOffset = (screenHeight - wndHeight) / 2 + wndHeightOffset;
+ 	s32 dstCoord[4] = { hOffset, vOffset, hOffset + static_cast<s32>(wndWidth), vOffset + static_cast<s32>(wndHeight) };
