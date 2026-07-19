@@ -73,7 +73,8 @@ private:
  */
 class DrawScope {
 public:
-	explicit DrawScope(bool transformGeometry);
+	explicit DrawScope(bool transformGeometry,
+		bool correctScreenSpaceProjection = false);
 	~DrawScope();
 
 	DrawScope(const DrawScope&) = delete;
@@ -85,6 +86,7 @@ public:
 private:
 	bool m_active;
 	bool m_transformGeometry;
+	bool m_correctScreenSpaceProjection;
 	int m_targetWidth;
 	int m_coordinateWidth;
 };

@@ -178,6 +178,15 @@ struct TransformCache {
 
 TransformCache s_transformCache;
 
+struct ScreenSpaceTransformCache {
+	bool cached{false};
+	bool valid{false};
+	unsigned int poseGeneration{0};
+	std::array<std::array<float, 16>, 2> eyes{};
+};
+
+ScreenSpaceTransformCache s_screenSpaceTransformCache;
+
 Quaternion normalize(Quaternion q)
 {
 	const float lengthSquared = q.x * q.x + q.y * q.y + q.z * q.z + q.w * q.w;
@@ -579,7 +588,62 @@ const std::array<float, 16>& getEyeTransform(unsigned int eye)
 	return s_transformCache.eyes[std::min(eye, 1U)];
 }
 
-void setProgramEye(unsigned int eye, bool enabled, bool transformGeometry)
+bool buildScreenSpaceEyeTransform(unsigned int eye, const FramePoseState& framePose,
+	float* destination)
+{
+	identity(destination);
+	if (!framePose.haveRuntimeViews)
+		return false;
+
+	const RuntimeViewState& view = framePose.views[std::min(eye, 1U)];
+	const float tanLeft = std::tan(view.angleLeft);
+	const float tanRight = std::tan(view.angleRight);
+	const float tanUp = std::tan(view.angleUp);
+	const float tanDown = std::tan(view.angleDown);
+	const float width = tanRight - tanLeft;
+	const float height = tanUp - tanDown;
+	if (!std::isfinite(width) || !std::isfinite(height) ||
+		width < 0.01f || height < 0.01f)
+		return false;
+
+	const float offsetX = -(tanRight + tanLeft) / width;
+	const float offsetY = -(tanUp + tanDown) / height;
+	if (!std::isfinite(offsetX) || !std::isfinite(offsetY))
+		return false;
+
+	// Screen-space vertices currently use symmetric eye-image coordinates. OpenXR's
+	// asymmetric per-eye frusta place the forward optical axis at a different NDC
+	// location in each eye. Shift only the clip-space centre; keep HUD rotation,
+	// translation and scale head-stable.
+	destination[12] = offsetX;
+	destination[13] = offsetY;
+	return true;
+}
+
+const std::array<float, 16>* getScreenSpaceEyeTransform(unsigned int eye)
+{
+	latchFramePose();
+	const unsigned int poseGeneration = s_framePose.generation;
+	if (!s_screenSpaceTransformCache.cached ||
+		s_screenSpaceTransformCache.poseGeneration != poseGeneration) {
+		s_screenSpaceTransformCache.cached = true;
+		s_screenSpaceTransformCache.poseGeneration = poseGeneration;
+		s_screenSpaceTransformCache.valid = s_framePose.haveRuntimeViews;
+		for (unsigned int index = 0; index < 2; ++index) {
+			const bool eyeValid = buildScreenSpaceEyeTransform(index, s_framePose,
+				s_screenSpaceTransformCache.eyes[index].data());
+			s_screenSpaceTransformCache.valid =
+				s_screenSpaceTransformCache.valid && eyeValid;
+		}
+	}
+
+	if (!s_screenSpaceTransformCache.valid)
+		return nullptr;
+	return &s_screenSpaceTransformCache.eyes[std::min(eye, 1U)];
+}
+
+void setProgramEye(unsigned int eye, bool enabled, bool transformGeometry,
+	bool correctScreenSpaceProjection)
 {
 	const auto program = s_programs.find(s_currentProgram);
 	if (program == s_programs.end())
@@ -597,16 +661,29 @@ void setProgramEye(unsigned int eye, bool enabled, bool transformGeometry)
 	if (uniforms.eye >= 0)
 		glUniform1i(uniforms.eye, static_cast<GLint>(eye));
 
-	std::array<float, 16> worldProjection{};
-	bool projectionContainsView = false;
-	const bool applyTransform = transformGeometry &&
-		getWorldProjection(worldProjection, projectionContainsView);
+	std::array<float, 16> matrix{};
+	bool applyTransform = false;
+	if (transformGeometry) {
+		std::array<float, 16> worldProjection{};
+		bool projectionContainsView = false;
+		if (getWorldProjection(worldProjection, projectionContainsView)) {
+			matrix = getEyeTransform(eye);
+			applyTransform = true;
+		}
+	} else if (correctScreenSpaceProjection) {
+		const std::array<float, 16>* screenSpaceMatrix =
+			getScreenSpaceEyeTransform(eye);
+		if (screenSpaceMatrix != nullptr) {
+			matrix = *screenSpaceMatrix;
+			applyTransform = true;
+		}
+	}
+
 	if (uniforms.transformEnabled >= 0)
 		glUniform1i(uniforms.transformEnabled, applyTransform ? 1 : 0);
 	if (!applyTransform)
 		return;
 
-	const std::array<float, 16>& matrix = getEyeTransform(eye);
 	for (int row = 0; row < 4; ++row) {
 		if (uniforms.rows[row] >= 0) {
 			glUniform4f(uniforms.rows[row], matrix[row], matrix[4 + row],
@@ -878,6 +955,7 @@ void resetGraphicsState()
 	s_framebufferTargets.clear();
 	s_packedFramebufferTextures.clear();
 	s_transformCache.valid = false;
+	s_screenSpaceTransformCache.cached = false;
 	s_framePose.valid = false;
 	s_framePoseNeedsLatch.store(true, std::memory_order_release);
 }
@@ -954,10 +1032,11 @@ int BlitScope::mapDestinationX(int value, unsigned int eye) const
 		: value;
 }
 
-DrawScope::DrawScope(bool transformGeometry)
+DrawScope::DrawScope(bool transformGeometry, bool correctScreenSpaceProjection)
 	: m_active(isStereoEnabled() && isPackedFramebuffer(s_drawFramebuffer) &&
 		s_viewport.width >= 2 && s_viewport.height > 0)
 	, m_transformGeometry(transformGeometry)
+	, m_correctScreenSpaceProjection(correctScreenSpaceProjection)
 	, m_targetWidth(getDrawTargetWidth())
 	, m_coordinateWidth(getDrawCoordinateWidth(m_targetWidth))
 {
@@ -995,7 +1074,7 @@ DrawScope::~DrawScope()
 {
 	if (!m_active)
 		return;
-	setProgramEye(0, false, m_transformGeometry);
+	setProgramEye(0, false, m_transformGeometry, m_correctScreenSpaceProjection);
 	glViewport(s_viewport.x, s_viewport.y, s_viewport.width, s_viewport.height);
 	if (s_scissorEnabled)
 		glScissor(s_scissor.x, s_scissor.y, s_scissor.width, s_scissor.height);
@@ -1033,7 +1112,7 @@ void DrawScope::selectEye(unsigned int eye)
 		glScissor(clampedStart, s_scissor.y, clampedEnd - clampedStart, s_scissor.height);
 	}
 
-	setProgramEye(eye, true, m_transformGeometry);
+	setProgramEye(eye, true, m_transformGeometry, m_correctScreenSpaceProjection);
 }
 
 } // namespace QuestVr
