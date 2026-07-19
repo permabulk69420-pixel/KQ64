@@ -11,6 +11,7 @@
 #include "RSP.h"
 #include "VI.h"
 #include "FrameBuffer.h"
+#include "QuestVr.h"
 #include "TexrectDrawer.h"
 
 using namespace graphics;
@@ -290,6 +291,7 @@ bool TexrectDrawer::addRect()
 
 void TexrectDrawer::addBackgroundRect()
 {
+	QuestVr::noteBackgroundRectangle();
 	DisplayWindow & wnd = dwnd();
 	GraphicsDrawer &  drawer = wnd.getDrawer();
 	RectVertex * pRect = drawer.m_rect;

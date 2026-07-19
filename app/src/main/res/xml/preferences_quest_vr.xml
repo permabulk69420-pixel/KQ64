@@ -8,6 +8,19 @@
             android:key="enabled"
             android:summary="@string/questVrEnabled_summary"
             android:title="@string/questVrEnabled_title" />
+        <androidx.preference.ListPreference
+            android:defaultValue="immersive_projection"
+            android:entries="@array/questVrPresentation_entries"
+            android:entryValues="@array/questVrPresentation_values"
+            android:key="presentation_mode"
+            android:summary="@string/questVrPresentation_summary"
+            android:title="@string/questVrPresentation_title" />
+        <androidx.preference.EditTextPreference
+            android:defaultValue="1.0"
+            android:inputType="numberDecimal"
+            android:key="immersive_view_scale"
+            android:summary="@string/questVrImmersiveScale_summary"
+            android:title="@string/questVrImmersiveScale_title" />
         <androidx.preference.CheckBoxPreference
             android:defaultValue="true"
             android:key="stereo_enabled"
@@ -112,9 +125,9 @@
             android:summary="@string/questVrOpenXrFov_summary"
             android:title="@string/questVrOpenXrFov_title" />
         <androidx.preference.EditTextPreference
-            android:defaultValue="1.0"
+            android:defaultValue="2.0"
             android:inputType="numberDecimal"
-            android:key="stereo_source_width_scale"
+            android:key="stereo_source_width_multiplier_v2"
             android:summary="@string/questVrSourceScale_summary"
             android:title="@string/questVrSourceScale_title" />
         <androidx.preference.EditTextPreference

@@ -45,6 +45,13 @@ bool UnbufferedDrawer::_updateAttribPointer(u32 _index, const void * _ptr)
 
 void UnbufferedDrawer::drawTriangles(const graphics::Context::DrawTriangleParameters & _params)
 {
+	u32 modifiedPositionVertices = 0;
+	for (u32 index = 0; index < _params.verticesCount; ++index) {
+		if ((_params.vertices[index].modify & 0xFFU) != 0)
+			++modifiedPositionVertices;
+	}
+	QuestVr::noteGeometryVertices(_params.verticesCount, modifiedPositionVertices);
+
 	{
 		m_cachedAttribArray->enableVertexAttribArray(triangleAttrib::position, true);
 		const void * ptr = &_params.vertices->x;
@@ -179,6 +186,13 @@ void UnbufferedDrawer::drawRects(const graphics::Context::DrawRectParameters & _
 
 void UnbufferedDrawer::drawLine(f32 _width, SPVertex * _vertices)
 {
+	u32 modifiedPositionVertices = 0;
+	for (u32 index = 0; index < 2; ++index) {
+		if ((_vertices[index].modify & 0xFFU) != 0)
+			++modifiedPositionVertices;
+	}
+	QuestVr::noteGeometryVertices(2, modifiedPositionVertices);
+
 	{
 		m_cachedAttribArray->enableVertexAttribArray(triangleAttrib::position, true);
 		const void * ptr = &_vertices->x;

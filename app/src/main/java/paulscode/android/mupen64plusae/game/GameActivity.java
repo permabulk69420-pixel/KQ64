@@ -617,16 +617,28 @@ public class GameActivity extends AppCompatActivity implements PromptConfirmList
 
         final QuestVrSettings.SourceRenderSize size =
                 QuestVrSettings.resolveStereoSourceSize(baseWidth, baseHeight, vr);
-        QuestVrDiagnostics.info(TAG, "Quest VR producer resolution base=" +
-                size.baseWidth + "x" + size.baseHeight + " widthScale=" +
-                vr.stereoSourceWidthScale + " requested=" + size.requestedWidth + "x" +
-                size.requestedHeight + " effective=" + size.actualWidth + "x" +
+        QuestVrDiagnostics.info(TAG, "Quest VR producer resolution selectedPerEye=" +
+                size.baseWidth + "x" + size.baseHeight + " widthMultiplier=" +
+                vr.stereoSourceWidthMultiplier + " requestedTotal=" +
+                size.requestedWidth + "x" + size.requestedHeight +
+                " requestedPerEye=" + size.requestedPerEyeWidth + "x" +
+                size.requestedHeight + " effectiveTotal=" + size.actualWidth + "x" +
+                size.actualHeight + " effectivePerEye=" + size.actualPerEyeWidth + "x" +
                 size.actualHeight + " contentAspect=" + size.contentAspect +
                 " downscale=" + size.downscale + " clamped=" + size.clamped +
+                " limits width=" + size.widthLimited + " height=" + size.heightLimited +
+                " pixels=" + size.pixelLimited +
                 " userWidthCap=" + vr.maxStereoSourceWidth + " hardLimits=" +
                 QuestVrSettings.SAFE_MAX_SOURCE_WIDTH + "x" +
                 QuestVrSettings.SAFE_MAX_SOURCE_HEIGHT + "/" +
                 QuestVrSettings.SAFE_MAX_SOURCE_PIXELS + "px");
+        if (size.widthLimited) {
+            QuestVrDiagnostics.warn(TAG, "Quest VR resolution plateau reached: this and " +
+                    "larger presets with the same content aspect resolve to effectiveTotal=" +
+                    size.actualWidth + "x" + size.actualHeight + " effectivePerEye=" +
+                    size.actualPerEyeWidth + "x" + size.actualHeight +
+                    " at the current source-width cap");
+        }
         return new int[] {size.actualWidth, size.actualHeight};
     }
 

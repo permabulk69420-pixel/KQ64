@@ -1994,6 +1994,7 @@ void _loadSpriteImage(const uSprite *_pSprite)
 
 void gSPSprite2DBase(u32 _base)
 {
+	QuestVr::noteSprite2D();
 	DebugMsg(DEBUG_NORMAL, "gSPSprite2DBase\n");
 	assert(RSP.nextCmd == 0xBE);
 	const u32 address = RSP_SegmentToPhysical( _base );

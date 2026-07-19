@@ -38,6 +38,19 @@ enum class RenderContent {
     HeadLockedDiagnostic,
 };
 
+enum class PresentationMode : int {
+    ImmersiveProjection = 0,
+    CinemaScreen = 1,
+};
+
+const char* presentationModeName(PresentationMode mode) {
+    switch (mode) {
+        case PresentationMode::ImmersiveProjection: return "IMMERSIVE_PROJECTION";
+        case PresentationMode::CinemaScreen: return "CINEMA_SCREEN";
+        default: return "UNKNOWN";
+    }
+}
+
 const char* renderContentName(RenderContent content) {
     switch (content) {
         case RenderContent::SourceTexture: return "SOURCE_TEXTURE";
@@ -71,7 +84,14 @@ using ConfigureVrFn = void (*)(int stereoEnabled, float ipdMeters, float worldUn
 using RecenterVrFn = void (*)();
 using GetVrStatsFn = void (*)(uint32_t* geometryDraws, uint32_t* rectangleDraws,
                               uint32_t* eyeDraws, uint32_t* poseGeneration,
-                              uint32_t* targetWidthFallbacks, uint32_t* lastTargetWidth);
+                              uint32_t* targetWidthFallbacks, uint32_t* lastTargetWidth,
+                              uint32_t* perspectiveDraws, uint32_t* orthographicDraws,
+                              uint32_t* missingTransformProgramDraws,
+                              uint32_t* geometryVertices,
+                              uint32_t* modifiedPositionVertices,
+                              uint32_t* framebufferBlits,
+                              uint32_t* backgroundRectangles,
+                              uint32_t* sprite2DCommands);
 using GetPresentedPoseTimestampFn = int64_t (*)();
 using SetVrInputFn = void (*)(int enabled, uint32_t buttonMask, float analogX, float analogY);
 
@@ -135,6 +155,7 @@ struct State {
     float sourceContentAspect{4.0f / 3.0f};
     bool stereoRequested{false};
     bool stereoSourceActive{false};
+    bool immersiveScaleLogged{false};
 
     SetVrEnabledFn setVrEnabled{nullptr};
     SetVrPoseFn setVrPose{nullptr};
@@ -155,6 +176,8 @@ struct State {
     bool configurationStereoEnabled{true};
     bool configurationSwapEyes{false};
     float configurationIpdMeters{0.064f};
+    PresentationMode configurationPresentationMode{PresentationMode::ImmersiveProjection};
+    float configurationImmersiveViewScale{1.0f};
     float configurationScreenScale{1.0f};
     float configurationScreenDistanceMeters{2.0f};
     bool configurationStartupProofLayers{false};
@@ -859,9 +882,20 @@ void publishHeadPose(XrTime displayTime, uint32_t viewCount) {
         uint32_t poseGeneration = 0;
         uint32_t targetWidthFallbacks = 0;
         uint32_t lastTargetWidth = 0;
+        uint32_t perspectiveDraws = 0;
+        uint32_t orthographicDraws = 0;
+        uint32_t missingTransformProgramDraws = 0;
+        uint32_t geometryVertices = 0;
+        uint32_t modifiedPositionVertices = 0;
+        uint32_t framebufferBlits = 0;
+        uint32_t backgroundRectangles = 0;
+        uint32_t sprite2DCommands = 0;
         if (g.getVrStats != nullptr) {
             g.getVrStats(&geometryDraws, &rectangleDraws, &eyeDraws, &poseGeneration,
-                         &targetWidthFallbacks, &lastTargetWidth);
+                         &targetWidthFallbacks, &lastTargetWidth, &perspectiveDraws,
+                         &orthographicDraws, &missingTransformProgramDraws,
+                         &geometryVertices, &modifiedPositionVertices, &framebufferBlits,
+                         &backgroundRectangles, &sprite2DCommands);
         }
         float runtimeIpd = 0.0f;
         if (viewCount >= 2) {
@@ -874,14 +908,19 @@ void publishHeadPose(XrTime displayTime, uint32_t viewCount) {
         }
         LOGI("pose q=[%.3f %.3f %.3f %.3f] p=[%.3f %.3f %.3f], "
              "runtimeIpd=%.4f fovL=[%.3f %.3f %.3f %.3f], "
-             "draws geometry=%u rect=%u eyes=%u poseGeneration=%u "
-             "targetWidth=%u targetFallbacks=%u",
+             "draws geometry=%u perspective=%u orthographic=%u rect=%u "
+             "backgroundRect=%u sprite2D=%u blits=%u "
+             "missingTransformProgram=%u vertices=%u modifiedXY=%u eyes=%u "
+             "poseGeneration=%u targetWidth=%u targetFallbacks=%u",
              pose.orientation.x, pose.orientation.y, pose.orientation.z, pose.orientation.w,
              position.x, position.y, position.z, runtimeIpd,
              g.views[0].fov.angleLeft, g.views[0].fov.angleRight,
              g.views[0].fov.angleUp, g.views[0].fov.angleDown,
-             geometryDraws, rectangleDraws, eyeDraws, poseGeneration,
-             lastTargetWidth, targetWidthFallbacks);
+             geometryDraws, perspectiveDraws, orthographicDraws, rectangleDraws,
+             backgroundRectangles, sprite2DCommands, framebufferBlits,
+             missingTransformProgramDraws, geometryVertices,
+             modifiedPositionVertices, eyeDraws, poseGeneration, lastTargetWidth,
+             targetWidthFallbacks);
     }
 }
 
@@ -1122,7 +1161,8 @@ void pollEvents() {
     }
 }
 
-bool renderEye(uint32_t eye, uint32_t imageIndex, RenderContent content) {
+bool renderEye(uint32_t eye, uint32_t imageIndex, RenderContent content,
+               PresentationMode presentationMode) {
     const Swapchain& swapchain = g.swapchains[eye];
     while (glGetError() != GL_NO_ERROR) {
         // Discard stale errors so diagnostics describe this eye submission.
@@ -1166,11 +1206,35 @@ bool renderEye(uint32_t eye, uint32_t imageIndex, RenderContent content) {
         const float uvOffsetX = stereo ? (sourceEye == 0 ? 0.0f : 0.5f) : 0.0f;
         glUniform4f(g.uvTransformUniform, uvScaleX, 1.0f, uvOffsetX, 0.0f);
 
-        // The compositor maps this full swapchain image onto a quad whose physical dimensions
-        // carry the game's content aspect. Filling the swapchain here avoids baking a second set
-        // of black bars into the cinema screen and correctly restores the pixel aspect of a
-        // reduced-width side-by-side stereo producer.
-        glUniform2f(g.quadScaleUniform, 1.0f, 1.0f);
+        float scaleX = 1.0f;
+        float scaleY = 1.0f;
+        if (presentationMode == PresentationMode::ImmersiveProjection) {
+            // The emulator's per-eye content is normally 4:3 while Quest's eye swapchain is
+            // close to square. Aspect-fit into the projection image so the full useful source is
+            // visible rather than stretching or cropping it to the complete eye texture.
+            const float sourceAspect = std::clamp(g.sourceContentAspect, 0.5f, 3.0f);
+            const float targetAspect = swapchain.height > 0
+                ? swapchain.width / static_cast<float>(swapchain.height) : sourceAspect;
+            if (sourceAspect > targetAspect) {
+                scaleY = targetAspect / sourceAspect;
+            } else if (sourceAspect < targetAspect) {
+                scaleX = sourceAspect / targetAspect;
+            }
+            scaleX *= g.configurationImmersiveViewScale;
+            scaleY *= g.configurationImmersiveViewScale;
+            if (!g.immersiveScaleLogged) {
+                LOGI("Immersive aspect fit sourceAspect=%.4f targetAspect=%.4f "
+                     "userScale=%.3f effectiveNdcScale=%.4fx%.4f sourcePerEye=%dx%d "
+                     "consumerEye=%dx%d",
+                     sourceAspect, targetAspect, g.configurationImmersiveViewScale,
+                     scaleX, scaleY, g.stereoSourceActive ? g.sourceWidth / 2 : g.sourceWidth,
+                     g.sourceHeight, swapchain.width, swapchain.height);
+                g.immersiveScaleLogged = true;
+            }
+        }
+        // Cinema quads carry the content aspect in their physical dimensions, so they continue
+        // to fill the eye swapchain. Projection mode uses the aspect-fit scale above.
+        glUniform2f(g.quadScaleUniform, scaleX, scaleY);
         glDrawArrays(GL_TRIANGLES, 0, 6);
     }
 
@@ -1190,7 +1254,8 @@ bool renderEye(uint32_t eye, uint32_t imageIndex, RenderContent content) {
     return true;
 }
 
-bool acquireRenderRelease(uint32_t eye, RenderContent content) {
+bool acquireRenderRelease(uint32_t eye, RenderContent content,
+                          PresentationMode presentationMode) {
     Swapchain& swapchain = g.swapchains[eye];
     XrSwapchainImageAcquireInfo acquireInfo{XR_TYPE_SWAPCHAIN_IMAGE_ACQUIRE_INFO};
     uint32_t imageIndex = 0;
@@ -1222,7 +1287,7 @@ bool acquireRenderRelease(uint32_t eye, RenderContent content) {
         return false;
     }
 
-    const bool rendered = renderEye(eye, imageIndex, content);
+    const bool rendered = renderEye(eye, imageIndex, content, presentationMode);
     XrSwapchainImageReleaseInfo releaseInfo{XR_TYPE_SWAPCHAIN_IMAGE_RELEASE_INFO};
     const XrResult releaseResult = xrReleaseSwapchainImage(swapchain.handle, &releaseInfo);
     const bool released = xrFrameOk(releaseResult, "xrReleaseSwapchainImage");
@@ -1483,8 +1548,8 @@ bool initializeOpenXr(JNIEnv* env, jobject activity) {
     }
 
     g.initialized = true;
-    LOGI("OpenXR presentation bridge initialized on GLES %d.%d; normal launches submit the "
-         "game on a LOCAL-space world-locked quad (startup proof layers are debug-only)",
+    LOGI("OpenXR presentation bridge initialized on GLES %d.%d; native presentation mode is "
+         "selected by configuration before the first submitted frame (proof layers debug-only)",
          major, minor);
     return true;
 }
@@ -1512,13 +1577,16 @@ Java_paulscode_android_mupen64plusae_questvr_QuestVrBridge_nativeSetSourceTextur
     g.sourceContentAspect = std::isfinite(contentAspect)
         ? std::clamp(static_cast<float>(contentAspect), 0.5f, 3.0f)
         : 4.0f / 3.0f;
+    g.immersiveScaleLogged = false;
     g.stereoRequested = requestStereo == JNI_TRUE;
     resolveRendererBridge();
     g.stereoSourceActive = g.setVrEnabled != nullptr && g.stereoRequested &&
                            g.configurationStereoEnabled;
-    LOGI("Source texture update tid=%ld texture=%d size=%dx%d contentAspect=%.4f "
+    LOGI("Source texture update tid=%ld texture=%d total=%dx%d perEye=%dx%d "
+         "contentAspect=%.4f "
          "requestStereo=%d stereoActive=%d blitReady=%d currentContext=%p",
          QuestVrDiagnostics::currentThreadId(), texture, width, height,
+         requestStereo == JNI_TRUE ? width / 2 : width, height,
          g.sourceContentAspect, requestStereo == JNI_TRUE ? 1 : 0,
          g.stereoSourceActive ? 1 : 0,
          g.sourceBlitReady ? 1 : 0, eglGetCurrentContext());
@@ -1551,6 +1619,7 @@ Java_paulscode_android_mupen64plusae_questvr_QuestVrBridge_nativeOnSourceFrameLa
 extern "C" JNIEXPORT void JNICALL
 Java_paulscode_android_mupen64plusae_questvr_QuestVrBridge_nativeConfigure(
         JNIEnv*, jclass, jboolean stereoEnabled, jboolean swapEyes, jfloat ipdMeters,
+        jint presentationMode, jfloat immersiveViewScale,
         jfloat screenScale, jfloat screenDistanceMeters, jboolean startupProofLayers,
         jfloat worldUnitsPerMeter, jfloat rotationStrength, jboolean positionEnabled,
         jfloat maxTranslationMeters, jfloat cameraOffsetX, jfloat cameraOffsetY,
@@ -1560,6 +1629,12 @@ Java_paulscode_android_mupen64plusae_questvr_QuestVrBridge_nativeConfigure(
     g.configurationStereoEnabled = stereoEnabled == JNI_TRUE;
     g.configurationSwapEyes = swapEyes == JNI_TRUE;
     g.configurationIpdMeters = ipdMeters;
+    g.configurationPresentationMode = presentationMode ==
+            static_cast<jint>(PresentationMode::CinemaScreen)
+        ? PresentationMode::CinemaScreen : PresentationMode::ImmersiveProjection;
+    g.configurationImmersiveViewScale = std::isfinite(immersiveViewScale)
+        ? std::clamp(static_cast<float>(immersiveViewScale), 0.50f, 1.00f) : 1.0f;
+    g.immersiveScaleLogged = false;
     g.configurationScreenScale = std::isfinite(screenScale)
         ? std::clamp(static_cast<float>(screenScale), 0.35f, 2.0f) : 1.0f;
     g.configurationScreenDistanceMeters = std::isfinite(screenDistanceMeters)
@@ -1579,14 +1654,19 @@ Java_paulscode_android_mupen64plusae_questvr_QuestVrBridge_nativeConfigure(
     g.configurationMarioKartCameraOffsetZ = marioKartCameraOffsetZ;
     g.touchControllerEnabled = touchControllerEnabled == JNI_TRUE;
     g.debugLogging = debugLogging == JNI_TRUE;
-    LOGI("Quest VR configuration stereo=%d swapEyes=%d ipd=%.4f screenScale=%.3f "
-         "screenDistance=%.3fm proofLayers=%d worldUnits=%.2f rotation=%.2f "
+    LOGI("Quest VR configuration presentation=%s immersiveScale=%.3f stereo=%d "
+         "swapEyes=%d ipd=%.4f screenScale=%.3f "
+         "screenDistance=%.3fm proofLayers=%d worldUnits=%.2f "
+         "rotationUser=%.2f rotationLateClip=%.2f "
          "position=%d maxTranslation=%.3f sourceBlitReady=%d debug=%d",
+         presentationModeName(g.configurationPresentationMode),
+         g.configurationImmersiveViewScale,
          g.configurationStereoEnabled ? 1 : 0, g.configurationSwapEyes ? 1 : 0,
          g.configurationIpdMeters, g.configurationScreenScale,
          g.configurationScreenDistanceMeters,
          g.configurationStartupProofLayers ? 1 : 0, g.configurationWorldUnitsPerMeter,
-         g.configurationRotationStrength, g.configurationPositionEnabled ? 1 : 0,
+         g.configurationRotationStrength, -g.configurationRotationStrength,
+         g.configurationPositionEnabled ? 1 : 0,
          g.configurationMaxTranslationMeters, g.sourceBlitReady ? 1 : 0,
          g.debugLogging ? 1 : 0);
     if (g.configureVr != nullptr) {
@@ -1609,7 +1689,9 @@ Java_paulscode_android_mupen64plusae_questvr_QuestVrBridge_nativeRecenter(
     if (g.recenterVr != nullptr) {
         g.recenterVr();
     }
-    LOGI("Requested game-screen LOCAL-space anchor and GLideN64 pose recenter");
+    LOGI("Requested presentation recenter mode=%s; cinema reanchors in LOCAL and "
+         "GLideN64 resets its pose origin",
+         presentationModeName(g.configurationPresentationMode));
 }
 
 extern "C" JNIEXPORT jboolean JNICALL
@@ -1688,8 +1770,14 @@ Java_paulscode_android_mupen64plusae_questvr_QuestVrBridge_nativeRenderFrame(
             (viewState.viewStateFlags & XR_VIEW_STATE_POSITION_VALID_BIT) != 0;
         if (validPose) {
             publishHeadPose(frameState.predictedDisplayTime, viewCount);
-            if (g.screenRecenterPending || !g.screenPoseValid) {
+            if (g.configurationPresentationMode == PresentationMode::CinemaScreen &&
+                    (g.screenRecenterPending || !g.screenPoseValid)) {
                 anchorScreenToCurrentView(viewCount);
+            } else if (g.configurationPresentationMode ==
+                    PresentationMode::ImmersiveProjection) {
+                // Recenter still resets GLideN64's pose origin. Immersive projection has no
+                // separate world-space screen anchor to update.
+                g.screenRecenterPending = false;
             }
             if (shouldLogDetailedFrame()) {
                 for (uint32_t eye = 0; eye < viewCount; ++eye) {
@@ -1708,9 +1796,10 @@ Java_paulscode_android_mupen64plusae_questvr_QuestVrBridge_nativeRenderFrame(
             ++g.locateFallbackCount;
             if (g.locateFallbackCount <= 10 || g.locateFallbackCount % 300 == 0) {
                 LOGW("Tracked views unavailable (result=%s count=%u flags=0x%llx); "
-                     "using the last LOCAL-space screen anchor and fallback proof views",
+                     "presentation=%s will use its last valid/fallback pose",
                      xrResultName(locateResult), viewCount,
-                     static_cast<unsigned long long>(viewState.viewStateFlags));
+                     static_cast<unsigned long long>(viewState.viewStateFlags),
+                     presentationModeName(g.configurationPresentationMode));
             }
         }
 
@@ -1739,7 +1828,7 @@ Java_paulscode_android_mupen64plusae_questvr_QuestVrBridge_nativeRenderFrame(
 
         if (headLockedProof) {
             content = RenderContent::HeadLockedDiagnostic;
-            if (acquireRenderRelease(0, content)) {
+            if (acquireRenderRelease(0, content, PresentationMode::CinemaScreen)) {
                 const Swapchain& swapchain = g.swapchains[0];
                 diagnosticQuad.layerFlags = 0;
                 diagnosticQuad.space = g.viewSpace;
@@ -1771,7 +1860,8 @@ Java_paulscode_android_mupen64plusae_questvr_QuestVrBridge_nativeRenderFrame(
                               {XR_TYPE_COMPOSITION_LAYER_PROJECTION_VIEW});
             bool rendered = true;
             for (uint32_t eye = 0; eye < compositionViewCount; ++eye) {
-                if (!acquireRenderRelease(eye, content)) {
+                if (!acquireRenderRelease(eye, content,
+                                          PresentationMode::ImmersiveProjection)) {
                     rendered = false;
                     break;
                 }
@@ -1815,66 +1905,133 @@ Java_paulscode_android_mupen64plusae_questvr_QuestVrBridge_nativeRenderFrame(
             if (!sourceReady &&
                     (g.begunFrameCount <= STARTUP_DETAILED_FRAME_COUNT ||
                      g.begunFrameCount % PERIODIC_DETAILED_FRAME_INTERVAL == 0)) {
-                LOGW("World-locked screen waiting for emulator source: blitReady=%d texture=%u "
-                     "latchCalls=%u newFrames=%u; submitting a black game quad",
+                LOGW("%s waiting for emulator source: blitReady=%d texture=%u "
+                     "latchCalls=%u newFrames=%u; submitting a black layer",
+                     presentationModeName(g.configurationPresentationMode),
                      g.sourceBlitReady ? 1 : 0, g.sourceTexture, g.sourceFrameLatchCalls,
                      g.newSourceFrameCount);
             }
+            if (g.configurationPresentationMode ==
+                    PresentationMode::ImmersiveProjection) {
+                const uint32_t compositionViewCount =
+                        static_cast<uint32_t>(g.swapchains.size());
+                layerViews.assign(compositionViewCount,
+                                  {XR_TYPE_COMPOSITION_LAYER_PROJECTION_VIEW});
+                const bool useMatchedSourcePose = sourceReady && g.stereoSourceActive &&
+                                                  g.sourceViewsValid;
+                bool rendered = true;
+                for (uint32_t eye = 0; eye < compositionViewCount; ++eye) {
+                    if (!acquireRenderRelease(eye, content,
+                                              PresentationMode::ImmersiveProjection)) {
+                        rendered = false;
+                        break;
+                    }
 
-            XrPosef screenPose = g.screenPose;
-            if (!g.screenPoseValid) {
-                setIdentity(screenPose);
-                screenPose.position.z = -g.configurationScreenDistanceMeters;
-            }
-            const float contentAspect = std::clamp(g.sourceContentAspect, 0.5f, 3.0f);
-            // At the default 2 m distance this 2.4 m width covers about 62 degrees, roughly
-            // one quarter smaller than the former full projection-eye presentation.
-            const float screenWidthMeters = 2.4f * g.configurationScreenScale;
-            const float screenHeightMeters = screenWidthMeters / contentAspect;
-            const bool stereoQuads = sourceReady && g.stereoSourceActive;
-            const uint32_t quadCount = stereoQuads ? 2U : 1U;
-            bool rendered = true;
-            for (uint32_t layerIndex = 0; layerIndex < quadCount; ++layerIndex) {
-                const uint32_t eye = stereoQuads ? layerIndex : 0U;
-                if (!acquireRenderRelease(eye, content)) {
-                    rendered = false;
-                    break;
+                    const uint32_t sourceEye = g.stereoSourceActive &&
+                            g.configurationSwapEyes ? 1U - eye : eye;
+                    const XrView& renderedView = useMatchedSourcePose
+                            ? g.sourceViews[sourceEye]
+                            : (validPose ? g.views[eye] : fallbackViews[eye]);
+                    const char* poseSource = useMatchedSourcePose
+                            ? "MATCHED_SOURCE_FRAME" : (validPose ? "CURRENT" : "FALLBACK");
+                    const Swapchain& swapchain = g.swapchains[eye];
+                    XrCompositionLayerProjectionView& view = layerViews[eye];
+                    view.pose = renderedView.pose;
+                    view.fov = renderedView.fov;
+                    view.subImage.swapchain = swapchain.handle;
+                    view.subImage.imageRect.offset = {0, 0};
+                    view.subImage.imageRect.extent = {swapchain.width, swapchain.height};
+                    view.subImage.imageArrayIndex = 0;
+                    if (shouldLogDetailedFrame()) {
+                        const double poseAgeMilliseconds = useMatchedSourcePose
+                            ? static_cast<double>(frameState.predictedDisplayTime -
+                                  g.sourceViewDisplayTime) / 1.0e6 : -1.0;
+                        LOGI("frame=%u immersiveProjectionView=%u sourceEye=%u poseSource=%s "
+                             "poseAge=%.2fms swapchain=%p rect=[0,0 %dx%d] array=0 "
+                             "pose=[q %.4f %.4f %.4f %.4f, p %.4f %.4f %.4f] "
+                             "fov=[L %.4f R %.4f U %.4f D %.4f] source=%dx%d "
+                             "perEye=%dx%d ready=%d",
+                             g.begunFrameCount, eye, sourceEye, poseSource,
+                             poseAgeMilliseconds,
+                             reinterpret_cast<void*>(swapchain.handle), swapchain.width,
+                             swapchain.height, view.pose.orientation.x,
+                             view.pose.orientation.y, view.pose.orientation.z,
+                             view.pose.orientation.w, view.pose.position.x,
+                             view.pose.position.y, view.pose.position.z,
+                             view.fov.angleLeft, view.fov.angleRight, view.fov.angleUp,
+                             view.fov.angleDown, g.sourceWidth, g.sourceHeight,
+                             g.stereoSourceActive ? g.sourceWidth / 2 : g.sourceWidth,
+                             g.sourceHeight, sourceReady ? 1 : 0);
+                    }
                 }
-
-                const Swapchain& swapchain = g.swapchains[eye];
-                XrCompositionLayerQuad& quad = gameQuads[layerIndex];
-                quad.layerFlags = 0;
-                quad.space = g.localSpace;
-                quad.eyeVisibility = stereoQuads
-                        ? (eye == 0 ? XR_EYE_VISIBILITY_LEFT : XR_EYE_VISIBILITY_RIGHT)
-                        : XR_EYE_VISIBILITY_BOTH;
-                quad.subImage.swapchain = swapchain.handle;
-                quad.subImage.imageRect.offset = {0, 0};
-                quad.subImage.imageRect.extent = {swapchain.width, swapchain.height};
-                quad.subImage.imageArrayIndex = 0;
-                quad.pose = screenPose;
-                quad.size = {screenWidthMeters, screenHeightMeters};
-                layers[layerIndex] = reinterpret_cast<const XrCompositionLayerBaseHeader*>(
-                        &quad);
-
-                if (shouldLogDetailedFrame()) {
-                    LOGI("frame=%u gameQuad=%u eyeVisibility=%s space=LOCAL swapchain=%p "
-                         "rect=[0,0 %dx%d] array=0 size=%.3fx%.3fm aspect=%.4f "
-                         "pose=[q %.4f %.4f %.4f %.4f, p %.4f %.4f %.4f] "
-                         "source=%dx%d ready=%d stereo=%d",
-                         g.begunFrameCount, layerIndex,
-                         stereoQuads ? (eye == 0 ? "LEFT" : "RIGHT") : "BOTH",
-                         reinterpret_cast<void*>(swapchain.handle), swapchain.width,
-                         swapchain.height, screenWidthMeters, screenHeightMeters,
-                         contentAspect, screenPose.orientation.x, screenPose.orientation.y,
-                         screenPose.orientation.z, screenPose.orientation.w,
-                         screenPose.position.x, screenPose.position.y, screenPose.position.z,
-                         g.sourceWidth, g.sourceHeight, sourceReady ? 1 : 0,
-                         stereoQuads ? 1 : 0);
+                if (rendered) {
+                    projectionLayer.layerFlags = 0;
+                    projectionLayer.space = (useMatchedSourcePose || validPose)
+                            ? g.localSpace : g.viewSpace;
+                    projectionLayer.viewCount = static_cast<uint32_t>(layerViews.size());
+                    projectionLayer.views = layerViews.data();
+                    layers[0] = reinterpret_cast<const XrCompositionLayerBaseHeader*>(
+                            &projectionLayer);
+                    layerCount = 1;
                 }
-            }
-            if (rendered) {
-                layerCount = quadCount;
+            } else {
+                XrPosef screenPose = g.screenPose;
+                if (!g.screenPoseValid) {
+                    setIdentity(screenPose);
+                    screenPose.position.z = -g.configurationScreenDistanceMeters;
+                }
+                const float contentAspect = std::clamp(g.sourceContentAspect, 0.5f, 3.0f);
+                const float screenWidthMeters = 2.4f * g.configurationScreenScale;
+                const float screenHeightMeters = screenWidthMeters / contentAspect;
+                const bool stereoQuads = sourceReady && g.stereoSourceActive;
+                const uint32_t quadCount = stereoQuads ? 2U : 1U;
+                bool rendered = true;
+                for (uint32_t layerIndex = 0; layerIndex < quadCount; ++layerIndex) {
+                    const uint32_t eye = stereoQuads ? layerIndex : 0U;
+                    if (!acquireRenderRelease(eye, content,
+                                              PresentationMode::CinemaScreen)) {
+                        rendered = false;
+                        break;
+                    }
+
+                    const Swapchain& swapchain = g.swapchains[eye];
+                    XrCompositionLayerQuad& quad = gameQuads[layerIndex];
+                    quad.layerFlags = 0;
+                    quad.space = g.localSpace;
+                    quad.eyeVisibility = stereoQuads
+                            ? (eye == 0 ? XR_EYE_VISIBILITY_LEFT : XR_EYE_VISIBILITY_RIGHT)
+                            : XR_EYE_VISIBILITY_BOTH;
+                    quad.subImage.swapchain = swapchain.handle;
+                    quad.subImage.imageRect.offset = {0, 0};
+                    quad.subImage.imageRect.extent = {swapchain.width, swapchain.height};
+                    quad.subImage.imageArrayIndex = 0;
+                    quad.pose = screenPose;
+                    quad.size = {screenWidthMeters, screenHeightMeters};
+                    layers[layerIndex] = reinterpret_cast<const XrCompositionLayerBaseHeader*>(
+                            &quad);
+
+                    if (shouldLogDetailedFrame()) {
+                        LOGI("frame=%u gameQuad=%u eyeVisibility=%s space=LOCAL swapchain=%p "
+                             "rect=[0,0 %dx%d] array=0 size=%.3fx%.3fm aspect=%.4f "
+                             "pose=[q %.4f %.4f %.4f %.4f, p %.4f %.4f %.4f] "
+                             "source=%dx%d perEye=%dx%d ready=%d stereo=%d",
+                             g.begunFrameCount, layerIndex,
+                             stereoQuads ? (eye == 0 ? "LEFT" : "RIGHT") : "BOTH",
+                             reinterpret_cast<void*>(swapchain.handle), swapchain.width,
+                             swapchain.height, screenWidthMeters, screenHeightMeters,
+                             contentAspect, screenPose.orientation.x,
+                             screenPose.orientation.y, screenPose.orientation.z,
+                             screenPose.orientation.w, screenPose.position.x,
+                             screenPose.position.y, screenPose.position.z,
+                             g.sourceWidth, g.sourceHeight,
+                             stereoQuads ? g.sourceWidth / 2 : g.sourceWidth,
+                             g.sourceHeight, sourceReady ? 1 : 0,
+                             stereoQuads ? 1 : 0);
+                    }
+                }
+                if (rendered) {
+                    layerCount = quadCount;
+                }
             }
         }
     } else {
@@ -1894,10 +2051,11 @@ Java_paulscode_android_mupen64plusae_questvr_QuestVrBridge_nativeRenderFrame(
     endInfo.layers = layerCount == 0 ? nullptr : layers.data();
     if (shouldLogDetailedFrame()) {
         LOGI("frame=%u xrEndFrame input displayTime=%lld blendMode=%d layerCount=%u "
-             "content=%s layerPtr=%p",
+             "content=%s presentation=%s layerPtr=%p",
              g.begunFrameCount, static_cast<long long>(endInfo.displayTime),
              static_cast<int>(endInfo.environmentBlendMode), layerCount,
-             renderContentName(content), layerCount == 0 ? nullptr : layers[0]);
+             renderContentName(content), presentationModeName(g.configurationPresentationMode),
+             layerCount == 0 ? nullptr : layers[0]);
     }
     const bool submitted = xrFrameOk(xrEndFrame(g.session, &endInfo), "xrEndFrame");
     const Clock::time_point nativeFrameEnd = Clock::now();
@@ -1921,8 +2079,9 @@ Java_paulscode_android_mupen64plusae_questvr_QuestVrBridge_nativeRenderFrame(
                 if (g.configurationStartupProofLayers) {
                     LOGI("First VISIBLE OpenXR layer submitted: debug green head-locked quad");
                 } else {
-                    LOGI("First VISIBLE OpenXR layer submitted: LOCAL-space game screen "
-                         "(proof layers disabled)");
+                    LOGI("First VISIBLE OpenXR layer submitted: presentation=%s "
+                         "(proof layers disabled)",
+                         presentationModeName(g.configurationPresentationMode));
                 }
             } else if (g.configurationStartupProofLayers &&
                     g.visibleLayerSubmissionCount == STARTUP_QUAD_VISIBLE_LAYER_COUNT) {
@@ -1951,7 +2110,8 @@ Java_paulscode_android_mupen64plusae_questvr_QuestVrBridge_nativeRenderFrame(
         LOGI("periodic status samples=%u submitted=%u layers=%u visibleLayers=%u state=%s "
              "avgWait=%.2fms "
              "avgNative=%.2fms avgWork=%.2fms maxWork=%.2fms "
-             "source=%dx%d contentAspect=%.4f stereo=%d swapEyes=%d eye=%dx%d "
+             "presentation=%s immersiveScale=%.3f sourceTotal=%dx%d sourcePerEye=%dx%d "
+             "contentAspect=%.4f stereo=%d swapEyes=%d consumerEye=%dx%d "
              "screenScale=%.3f screenDistance=%.3fm screenAnchorValid=%d "
              "proofLayers=%d sourcePoseAge=%.2fms "
              "poseMatches=%u poseMisses=%u textureTs=%lld latchCalls=%u newSourceFrames=%u "
@@ -1960,7 +2120,10 @@ Java_paulscode_android_mupen64plusae_questvr_QuestVrBridge_nativeRenderFrame(
              g.visibleLayerSubmissionCount, sessionStateName(g.sessionState),
              g.waitFrameMilliseconds / divisor, g.nativeFrameMilliseconds / divisor,
              g.workMilliseconds / divisor, g.maximumWorkMilliseconds,
-             g.sourceWidth, g.sourceHeight, g.sourceContentAspect,
+             presentationModeName(g.configurationPresentationMode),
+             g.configurationImmersiveViewScale, g.sourceWidth, g.sourceHeight,
+             g.stereoSourceActive ? g.sourceWidth / 2 : g.sourceWidth, g.sourceHeight,
+             g.sourceContentAspect,
              g.stereoSourceActive ? 1 : 0, g.configurationSwapEyes ? 1 : 0,
              eyeWidth, eyeHeight, g.configurationScreenScale,
              g.configurationScreenDistanceMeters, g.screenPoseValid ? 1 : 0,

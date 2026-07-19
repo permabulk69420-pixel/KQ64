@@ -239,6 +239,12 @@
     <string name="questVrCategory_rendering">Rendering and diagnostics</string>
     <string name="questVrEnabled_title">Enable Quest VR</string>
     <string name="questVrEnabled_summary">Start OpenXR on a head-tracked Android device; other devices keep normal presentation.</string>
+    <string name="questVrPresentation_title">VR presentation</string>
+    <string name="questVrPresentation_summary">Immersive projection submits per-eye projection views; cinema keeps the paired world-locked LOCAL-space screen. This is separate from Android’s navigation-bar immersive mode.</string>
+    <string name="questVrPresentation_immersive">Immersive projection</string>
+    <string name="questVrPresentation_cinema">World-locked cinema screen</string>
+    <string name="questVrImmersiveScale_title">Immersive field-of-view scale</string>
+    <string name="questVrImmersiveScale_summary">Scales the aspect-fitted immersive image from 0.5 to 1.0. Default 1.0 shows the complete 4:3 source without cropping.</string>
     <string name="questVrStereo_title">Native stereo geometry</string>
     <string name="questVrStereo_summary">Render different GLideN64 geometry transforms for the two eyes.</string>
     <string name="questVrSwapEyes_title">Swap source eyes</string>
@@ -271,8 +277,8 @@
     <string name="questVrMarioKartZ_summary">Default -0.75; tune after checking chase-camera distance.</string>
     <string name="questVrOpenXrFov_title">Use OpenXR per-eye FOV</string>
     <string name="questVrOpenXrFov_summary">Replace angular projection terms while retaining N64 depth mapping.</string>
-    <string name="questVrSourceScale_title">Stereo source width scale</string>
-    <string name="questVrSourceScale_summary">Actual GLideN64 producer-width multiplier. 1 is conservative; 2 preserves the flat horizontal resolution in each stereo half before safety clamping.</string>
+    <string name="questVrSourceScale_title">Stereo source resolution multiplier</string>
+    <string name="questVrSourceScale_summary">Default 2 requests the selected flat resolution for each eye. Lower values reduce both axes while preserving the per-eye aspect; Quest safety limits still clamp the complete side-by-side buffer.</string>
     <string name="questVrSourceMaximum_title">Maximum source width</string>
     <string name="questVrSourceMaximum_summary">Requested cap for the full side-by-side source. Quest safety limits never allow more than 2688 wide, 1440 high, or 3 megapixels.</string>
     <string name="questVrTouch_title">Quest controller fallback</string>

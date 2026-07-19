@@ -11,6 +11,10 @@ import java.util.Map;
  */
 public final class QuestVrSettings {
     public static final String PREFERENCES_NAME = "quest_vr";
+    public static final String PRESENTATION_IMMERSIVE_PROJECTION = "immersive_projection";
+    public static final String PRESENTATION_CINEMA_SCREEN = "cinema_screen";
+    public static final int PRESENTATION_MODE_IMMERSIVE_PROJECTION = 0;
+    public static final int PRESENTATION_MODE_CINEMA_SCREEN = 1;
     public static final int SAFE_MAX_SOURCE_WIDTH = 2688;
     public static final int SAFE_MAX_SOURCE_HEIGHT = 1440;
     public static final int SAFE_MAX_SOURCE_PIXELS = 3_000_000;
@@ -19,6 +23,10 @@ public final class QuestVrSettings {
     private static final float MAX_SCREEN_SCALE = 2.0f;
     private static final float MIN_SCREEN_DISTANCE_METERS = 0.75f;
     private static final float MAX_SCREEN_DISTANCE_METERS = 6.0f;
+    private static final float MIN_IMMERSIVE_SCALE = 0.50f;
+    private static final float MAX_IMMERSIVE_SCALE = 1.00f;
+    private static final String SOURCE_WIDTH_MULTIPLIER_V2 =
+            "stereo_source_width_multiplier_v2";
 
     private QuestVrSettings() {
     }
@@ -77,10 +85,35 @@ public final class QuestVrSettings {
                 getFloat(values, "hud_scale", 1.0f));
         final float screenScale = clampFinite(requestedScreenScale,
                 MIN_SCREEN_SCALE, MAX_SCREEN_SCALE, 1.0f);
-        final float requestedSourceWidthScale =
-                getFloat(values, "stereo_source_width_scale", 1.0f);
-        final float sourceWidthScale = clampFinite(requestedSourceWidthScale,
-                1.0f, 2.0f, 1.0f);
+        // Before this explicit setting existed, the only user-facing "Immersive mode" switch was
+        // Android's display/chrome preference. Honor its enabled state as a one-way fallback for
+        // existing installs, while the new Quest-specific setting takes precedence as soon as it
+        // exists. The default shared-preference filename is defined by PreferenceManager as the
+        // package name plus "_preferences"; avoiding an androidx dependency keeps this module thin.
+        final SharedPreferences globalPreferences = context.getSharedPreferences(
+                context.getPackageName() + "_preferences", Context.MODE_PRIVATE);
+        final boolean legacyAndroidImmersive = globalPreferences.getBoolean(
+                "displayImmersiveMode_v2", true);
+        final String requestedPresentation = preferences.getString("presentation_mode",
+                legacyAndroidImmersive ? PRESENTATION_IMMERSIVE_PROJECTION
+                        : PRESENTATION_CINEMA_SCREEN);
+        final int presentationMode = PRESENTATION_CINEMA_SCREEN.equals(requestedPresentation)
+                ? PRESENTATION_MODE_CINEMA_SCREEN
+                : PRESENTATION_MODE_IMMERSIVE_PROJECTION;
+        final String presentationName = presentationMode == PRESENTATION_MODE_CINEMA_SCREEN
+                ? PRESENTATION_CINEMA_SCREEN : PRESENTATION_IMMERSIVE_PROJECTION;
+        final float requestedImmersiveScale = getFloat(values, "immersive_view_scale", 1.0f);
+        final float immersiveScale = clampFinite(requestedImmersiveScale,
+                MIN_IMMERSIVE_SCALE, MAX_IMMERSIVE_SCALE, 1.0f);
+        // V2 changes the old width-only scale into an aspect-preserving stereo-resolution
+        // multiplier. A new key intentionally gives existing installs the corrected 2.0 default
+        // instead of carrying forward the prototype's malformed 1.0 side-by-side buffer.
+        final float legacySourceWidthScale =
+                getFloat(values, "stereo_source_width_scale", Float.NaN);
+        final float requestedSourceWidthMultiplier =
+                getFloat(values, SOURCE_WIDTH_MULTIPLIER_V2, 2.0f);
+        final float sourceWidthMultiplier = clampFinite(requestedSourceWidthMultiplier,
+                0.5f, 2.0f, 2.0f);
         final int requestedMaxSourceWidth =
                 getInt(values, "max_stereo_source_width", SAFE_MAX_SOURCE_WIDTH);
         final int maxSourceWidth = clamp(requestedMaxSourceWidth, 640,
@@ -91,12 +124,21 @@ public final class QuestVrSettings {
                 " entryCount=" + values.size() +
                 " screenDistance=" + requestedScreenDistance + "->" + screenDistance +
                 " screenScale=" + requestedScreenScale + "->" + screenScale +
-                " sourceWidthScale=" + requestedSourceWidthScale + "->" +
-                sourceWidthScale + " sourceWidthCap=" + requestedMaxSourceWidth + "->" +
+                " presentation=" + requestedPresentation + "->" + presentationName +
+                " explicitPresentation=" + preferences.contains("presentation_mode") +
+                " legacyAndroidImmersive=" + legacyAndroidImmersive +
+                " immersiveScale=" + requestedImmersiveScale + "->" + immersiveScale +
+                " sourceWidthMultiplierV2=" + requestedSourceWidthMultiplier + "->" +
+                sourceWidthMultiplier + " legacyWidthScale=" + legacySourceWidthScale +
+                " legacyIgnored=" + (!values.containsKey(SOURCE_WIDTH_MULTIPLIER_V2)) +
+                " sourceWidthCap=" + requestedMaxSourceWidth + "->" +
                 maxSourceWidth + " proofLayers=" +
                 preferences.getBoolean("startup_proof_layers", false));
         return new Configuration(
                 enabled,
+                presentationMode,
+                presentationName,
+                immersiveScale,
                 preferences.getBoolean("stereo_enabled", true),
                 preferences.getBoolean("swap_eyes", false),
                 getFloat(values, "ipd_meters", 0.064f),
@@ -117,7 +159,7 @@ public final class QuestVrSettings {
                 preferences.getBoolean("mario_kart_profile_enabled", true),
                 getFloat(values, "mario_kart_camera_offset_y_meters", -0.20f),
                 getFloat(values, "mario_kart_camera_offset_z_meters", -0.75f),
-                sourceWidthScale,
+                sourceWidthMultiplier,
                 maxSourceWidth,
                 preferences.getBoolean("touch_controller_enabled", true),
                 preferences.getBoolean("debug_logging", true),
@@ -127,9 +169,10 @@ public final class QuestVrSettings {
     /**
      * Resolve the actual GLideN64/SurfaceTexture producer size before the core starts.
      *
-     * The stereo plug-in divides the full producer width between both eyes. The width scale is
-     * therefore deliberately independent of presentation size: 1 uses half horizontal source
-     * resolution per eye, while 2 preserves the flat render's horizontal resolution per eye.
+     * The selected flat render size is the desired per-eye content size. At the default 2.0
+     * multiplier the complete side-by-side request is twice the selected width and each eye keeps
+     * the selected width and height. Lower multipliers reduce both axes together, preserving the
+     * per-eye content aspect instead of creating tall, narrow eye images.
      * Oversized EGL pbuffers have failed silently on Quest around 2880 pixels wide, so all limits
      * are applied proportionally and preserve the requested source-buffer aspect ratio.
      */
@@ -137,33 +180,46 @@ public final class QuestVrSettings {
             Configuration configuration) {
         final int safeBaseWidth = Math.max(2, baseWidth);
         final int safeBaseHeight = Math.max(2, baseHeight);
-        final int requestedWidth = evenDimension(
-                safeBaseWidth * (double) configuration.stereoSourceWidthScale);
-        final int requestedHeight = evenDimension(safeBaseHeight);
+        final int requestedWidth = stereoWidthDimension(
+                safeBaseWidth * (double) configuration.stereoSourceWidthMultiplier);
+        final int requestedHeight = evenDimension(
+                safeBaseHeight * (double) configuration.stereoSourceWidthMultiplier * 0.5);
 
-        double downscale = 1.0;
-        downscale = Math.min(downscale,
+        final double widthDownscale = Math.min(1.0,
                 configuration.maxStereoSourceWidth / (double) requestedWidth);
-        downscale = Math.min(downscale,
+        final double heightDownscale = Math.min(1.0,
                 SAFE_MAX_SOURCE_HEIGHT / (double) requestedHeight);
         final double requestedPixels = (double) requestedWidth * requestedHeight;
-        if (requestedPixels > SAFE_MAX_SOURCE_PIXELS) {
-            downscale = Math.min(downscale,
-                    Math.sqrt(SAFE_MAX_SOURCE_PIXELS / requestedPixels));
-        }
+        final double pixelDownscale = requestedPixels > SAFE_MAX_SOURCE_PIXELS
+                ? Math.sqrt(SAFE_MAX_SOURCE_PIXELS / requestedPixels) : 1.0;
+        double downscale = Math.min(widthDownscale,
+                Math.min(heightDownscale, pixelDownscale));
         downscale = Math.max(0.0, Math.min(1.0, downscale));
 
-        final int actualWidth = evenDimension(requestedWidth * downscale);
+        final int actualWidth = stereoWidthDimension(requestedWidth * downscale);
         final int actualHeight = evenDimension(requestedHeight * downscale);
+        final int requestedPerEyeWidth = requestedWidth / 2;
+        final int actualPerEyeWidth = actualWidth / 2;
+        final double epsilon = 1.0e-9;
         return new SourceRenderSize(safeBaseWidth, safeBaseHeight, requestedWidth,
-                requestedHeight, actualWidth, actualHeight, downscale,
-                safeBaseWidth / (float) safeBaseHeight,
-                requestedWidth != actualWidth || requestedHeight != actualHeight);
+                requestedHeight, requestedPerEyeWidth, actualWidth, actualHeight,
+                actualPerEyeWidth, downscale,
+                actualPerEyeWidth / (float) actualHeight,
+                requestedWidth != actualWidth || requestedHeight != actualHeight,
+                widthDownscale < 1.0 && widthDownscale <= downscale + epsilon,
+                heightDownscale < 1.0 && heightDownscale <= downscale + epsilon,
+                pixelDownscale < 1.0 && pixelDownscale <= downscale + epsilon);
     }
 
     private static int evenDimension(double value) {
         final double bounded = Math.max(2.0, Math.min(Integer.MAX_VALUE - 1.0, value));
-        return Math.max(2, ((int) Math.floor(bounded)) & ~1);
+        return Math.max(2, ((int) Math.floor(bounded + 1.0e-6)) & ~1);
+    }
+
+    /** Complete SBS width divisible by four so each eye receives an even width. */
+    private static int stereoWidthDimension(double value) {
+        final double bounded = Math.max(4.0, Math.min(Integer.MAX_VALUE - 3.0, value));
+        return Math.max(4, ((int) Math.floor(bounded + 1.0e-6)) & ~3);
     }
 
     public static final class SourceRenderSize {
@@ -171,29 +227,44 @@ public final class QuestVrSettings {
         public final int baseHeight;
         public final int requestedWidth;
         public final int requestedHeight;
+        public final int requestedPerEyeWidth;
         public final int actualWidth;
         public final int actualHeight;
+        public final int actualPerEyeWidth;
         public final double downscale;
         public final float contentAspect;
         public final boolean clamped;
+        public final boolean widthLimited;
+        public final boolean heightLimited;
+        public final boolean pixelLimited;
 
         private SourceRenderSize(int baseWidth, int baseHeight, int requestedWidth,
-                int requestedHeight, int actualWidth, int actualHeight, double downscale,
-                float contentAspect, boolean clamped) {
+                int requestedHeight, int requestedPerEyeWidth, int actualWidth,
+                int actualHeight, int actualPerEyeWidth, double downscale,
+                float contentAspect, boolean clamped, boolean widthLimited,
+                boolean heightLimited, boolean pixelLimited) {
             this.baseWidth = baseWidth;
             this.baseHeight = baseHeight;
             this.requestedWidth = requestedWidth;
             this.requestedHeight = requestedHeight;
+            this.requestedPerEyeWidth = requestedPerEyeWidth;
             this.actualWidth = actualWidth;
             this.actualHeight = actualHeight;
+            this.actualPerEyeWidth = actualPerEyeWidth;
             this.downscale = downscale;
             this.contentAspect = contentAspect;
             this.clamped = clamped;
+            this.widthLimited = widthLimited;
+            this.heightLimited = heightLimited;
+            this.pixelLimited = pixelLimited;
         }
     }
 
     public static final class Configuration {
         public final boolean enabled;
+        public final int presentationMode;
+        public final String presentationModeName;
+        public final float immersiveViewScale;
         public final boolean stereoEnabled;
         public final boolean swapEyes;
         public final float ipdMeters;
@@ -214,13 +285,14 @@ public final class QuestVrSettings {
         public final boolean marioKartProfileEnabled;
         public final float marioKartCameraOffsetYMeters;
         public final float marioKartCameraOffsetZMeters;
-        public final float stereoSourceWidthScale;
+        public final float stereoSourceWidthMultiplier;
         public final int maxStereoSourceWidth;
         public final boolean touchControllerEnabled;
         public final boolean debugLogging;
         public final boolean startupProofLayers;
 
-        private Configuration(boolean enabled, boolean stereoEnabled, boolean swapEyes, float ipdMeters,
+        private Configuration(boolean enabled, int presentationMode, String presentationModeName,
+                float immersiveViewScale, boolean stereoEnabled, boolean swapEyes, float ipdMeters,
                 float worldUnitsPerMeter, float rotationStrength, boolean positionEnabled,
                 float maxTranslationMeters, float cameraOffsetXMeters, float cameraOffsetYMeters,
                 float cameraOffsetZMeters, float nearPlane, float farPlane,
@@ -228,10 +300,13 @@ public final class QuestVrSettings {
                 float cullingExpansion,
                 boolean useOpenXrFov, boolean marioKartProfileEnabled,
                 float marioKartCameraOffsetYMeters, float marioKartCameraOffsetZMeters,
-                float stereoSourceWidthScale, int maxStereoSourceWidth,
+                float stereoSourceWidthMultiplier, int maxStereoSourceWidth,
                 boolean touchControllerEnabled, boolean debugLogging,
                 boolean startupProofLayers) {
             this.enabled = enabled;
+            this.presentationMode = presentationMode;
+            this.presentationModeName = presentationModeName;
+            this.immersiveViewScale = immersiveViewScale;
             this.stereoEnabled = stereoEnabled;
             this.swapEyes = swapEyes;
             this.ipdMeters = ipdMeters;
@@ -252,7 +327,7 @@ public final class QuestVrSettings {
             this.marioKartProfileEnabled = marioKartProfileEnabled;
             this.marioKartCameraOffsetYMeters = marioKartCameraOffsetYMeters;
             this.marioKartCameraOffsetZMeters = marioKartCameraOffsetZMeters;
-            this.stereoSourceWidthScale = stereoSourceWidthScale;
+            this.stereoSourceWidthMultiplier = stereoSourceWidthMultiplier;
             this.maxStereoSourceWidth = maxStereoSourceWidth;
             this.touchControllerEnabled = touchControllerEnabled;
             this.debugLogging = debugLogging;

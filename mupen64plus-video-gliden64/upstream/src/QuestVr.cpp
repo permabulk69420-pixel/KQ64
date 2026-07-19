@@ -116,6 +116,14 @@ std::atomic<unsigned int> s_configGeneration{1};
 std::atomic<unsigned int> s_geometryDraws{0};
 std::atomic<unsigned int> s_rectangleDraws{0};
 std::atomic<unsigned int> s_eyeDraws{0};
+std::atomic<unsigned int> s_perspectiveDraws{0};
+std::atomic<unsigned int> s_orthographicDraws{0};
+std::atomic<unsigned int> s_missingTransformProgramDraws{0};
+std::atomic<unsigned int> s_geometryVertices{0};
+std::atomic<unsigned int> s_modifiedPositionVertices{0};
+std::atomic<unsigned int> s_framebufferBlits{0};
+std::atomic<unsigned int> s_backgroundRectangles{0};
+std::atomic<unsigned int> s_sprite2DCommands{0};
 std::atomic<unsigned int> s_targetWidthFallbacks{0};
 std::atomic<unsigned int> s_lastTargetWidth{0};
 std::atomic<std::int64_t> s_poseTimestamp{0};
@@ -409,7 +417,12 @@ void buildEyeTransform(unsigned int eye, const FramePoseState& framePose,
 	const Quaternion recenterOrientation = framePose.recenterOrientation;
 	const Quaternion currentOrientation = framePose.orientation;
 	Quaternion headOrientation = multiply(conjugate(recenterOrientation), currentOrientation);
-	headOrientation = scaleRotation(headOrientation, s_rotationStrength.load(std::memory_order_relaxed));
+	// This matrix is applied after the N64 camera has already produced clip coordinates. At that
+	// late boundary the OpenXR view rotation has the opposite sign from an ordinary pre-projection
+	// camera transform. Convert it here so user-facing +1 follows the headset; a negative setting
+	// remains an intentional inversion.
+	const float userRotationStrength = s_rotationStrength.load(std::memory_order_relaxed);
+	headOrientation = scaleRotation(headOrientation, -userRotationStrength);
 
 	Vector3 headPosition{0.0f, 0.0f, 0.0f};
 	if (s_positionEnabled.load(std::memory_order_relaxed)) {
@@ -721,12 +734,35 @@ void markFramePresented()
 	s_framePoseNeedsLatch.store(true, std::memory_order_release);
 }
 
+void noteGeometryVertices(unsigned int totalVertices, unsigned int modifiedPositionVertices)
+{
+	if (!isStereoEnabled())
+		return;
+	s_geometryVertices.fetch_add(totalVertices, std::memory_order_relaxed);
+	s_modifiedPositionVertices.fetch_add(modifiedPositionVertices,
+		std::memory_order_relaxed);
+}
+
+void noteBackgroundRectangle()
+{
+	if (isStereoEnabled())
+		s_backgroundRectangles.fetch_add(1, std::memory_order_relaxed);
+}
+
+void noteSprite2D()
+{
+	if (isStereoEnabled())
+		s_sprite2DCommands.fetch_add(1, std::memory_order_relaxed);
+}
+
 BlitScope::BlitScope(unsigned int readFramebuffer, unsigned int drawFramebuffer)
 	: m_active(isStereoEnabled())
 	, m_sourceWidth(getFramebufferWidth(readFramebuffer))
 	, m_destinationWidth(getFramebufferWidth(drawFramebuffer))
 {
 	m_active = m_active && m_sourceWidth >= 2 && m_destinationWidth >= 2;
+	if (m_active)
+		s_framebufferBlits.fetch_add(1, std::memory_order_relaxed);
 }
 
 unsigned int BlitScope::eyeCount() const
@@ -751,10 +787,25 @@ DrawScope::DrawScope(bool transformGeometry)
 {
 	m_active = m_active && m_targetWidth >= 2;
 	if (m_active) {
-		if (m_transformGeometry)
+		if (m_transformGeometry) {
 			s_geometryDraws.fetch_add(1, std::memory_order_relaxed);
-		else
+			const bool perspective = isPerspectiveProjection(
+				reinterpret_cast<const float*>(gSP.matrix.projection));
+			if (perspective) {
+				s_perspectiveDraws.fetch_add(1, std::memory_order_relaxed);
+				const auto program = s_programs.find(s_currentProgram);
+				if (program == s_programs.end() || program->second.transformEnabled < 0 ||
+					program->second.rows[0] < 0 || program->second.rows[1] < 0 ||
+					program->second.rows[2] < 0 || program->second.rows[3] < 0) {
+					s_missingTransformProgramDraws.fetch_add(1,
+						std::memory_order_relaxed);
+				}
+			} else {
+				s_orthographicDraws.fetch_add(1, std::memory_order_relaxed);
+			}
+		} else {
 			s_rectangleDraws.fetch_add(1, std::memory_order_relaxed);
+		}
 	}
 }
 
@@ -815,6 +866,19 @@ extern "C" QUEST_VR_EXPORT void M64PQuestVrSetEnabled(int enabled)
 {
 	s_enabled.store(enabled != 0, std::memory_order_release);
 	if (enabled != 0) {
+		s_geometryDraws.store(0, std::memory_order_relaxed);
+		s_rectangleDraws.store(0, std::memory_order_relaxed);
+		s_eyeDraws.store(0, std::memory_order_relaxed);
+		s_perspectiveDraws.store(0, std::memory_order_relaxed);
+		s_orthographicDraws.store(0, std::memory_order_relaxed);
+		s_missingTransformProgramDraws.store(0, std::memory_order_relaxed);
+		s_geometryVertices.store(0, std::memory_order_relaxed);
+		s_modifiedPositionVertices.store(0, std::memory_order_relaxed);
+		s_framebufferBlits.store(0, std::memory_order_relaxed);
+		s_backgroundRectangles.store(0, std::memory_order_relaxed);
+		s_sprite2DCommands.store(0, std::memory_order_relaxed);
+		s_targetWidthFallbacks.store(0, std::memory_order_relaxed);
+		s_lastTargetWidth.store(0, std::memory_order_relaxed);
 		s_recenterRequested.store(true, std::memory_order_release);
 		s_haveRuntimeViews.store(false, std::memory_order_release);
 		s_havePendingRuntimeViews.store(false, std::memory_order_release);
@@ -901,7 +965,11 @@ extern "C" QUEST_VR_EXPORT void M64PQuestVrRecenter()
 
 extern "C" QUEST_VR_EXPORT void M64PQuestVrGetStats(unsigned int* geometryDraws,
 	unsigned int* rectangleDraws, unsigned int* eyeDraws, unsigned int* poseGeneration,
-	unsigned int* targetWidthFallbacks, unsigned int* lastTargetWidth)
+	unsigned int* targetWidthFallbacks, unsigned int* lastTargetWidth,
+	unsigned int* perspectiveDraws, unsigned int* orthographicDraws,
+	unsigned int* missingTransformProgramDraws, unsigned int* geometryVertices,
+	unsigned int* modifiedPositionVertices, unsigned int* framebufferBlits,
+	unsigned int* backgroundRectangles, unsigned int* sprite2DCommands)
 {
 	if (geometryDraws != nullptr)
 		*geometryDraws = s_geometryDraws.load(std::memory_order_relaxed);
@@ -915,6 +983,24 @@ extern "C" QUEST_VR_EXPORT void M64PQuestVrGetStats(unsigned int* geometryDraws,
 		*targetWidthFallbacks = s_targetWidthFallbacks.load(std::memory_order_relaxed);
 	if (lastTargetWidth != nullptr)
 		*lastTargetWidth = s_lastTargetWidth.load(std::memory_order_relaxed);
+	if (perspectiveDraws != nullptr)
+		*perspectiveDraws = s_perspectiveDraws.load(std::memory_order_relaxed);
+	if (orthographicDraws != nullptr)
+		*orthographicDraws = s_orthographicDraws.load(std::memory_order_relaxed);
+	if (missingTransformProgramDraws != nullptr)
+		*missingTransformProgramDraws =
+			s_missingTransformProgramDraws.load(std::memory_order_relaxed);
+	if (geometryVertices != nullptr)
+		*geometryVertices = s_geometryVertices.load(std::memory_order_relaxed);
+	if (modifiedPositionVertices != nullptr)
+		*modifiedPositionVertices =
+			s_modifiedPositionVertices.load(std::memory_order_relaxed);
+	if (framebufferBlits != nullptr)
+		*framebufferBlits = s_framebufferBlits.load(std::memory_order_relaxed);
+	if (backgroundRectangles != nullptr)
+		*backgroundRectangles = s_backgroundRectangles.load(std::memory_order_relaxed);
+	if (sprite2DCommands != nullptr)
+		*sprite2DCommands = s_sprite2DCommands.load(std::memory_order_relaxed);
 }
 
 extern "C" QUEST_VR_EXPORT std::int64_t M64PQuestVrGetPresentedPoseTimestamp()

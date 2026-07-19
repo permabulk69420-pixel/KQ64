@@ -21,6 +21,9 @@ void setScissor(int x, int y, int width, int height);
 void setScissorEnabled(bool enabled);
 void resetGraphicsState();
 void markFramePresented();
+void noteGeometryVertices(unsigned int totalVertices, unsigned int modifiedPositionVertices);
+void noteBackgroundRectangle();
+void noteSprite2D();
 
 /**
  * Maps an emulator-logical framebuffer blit into the packed left/right halves

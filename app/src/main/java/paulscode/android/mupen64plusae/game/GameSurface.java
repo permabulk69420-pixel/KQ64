@@ -978,13 +978,14 @@ public class GameSurface extends SurfaceView implements SurfaceHolder.Callback
                 final float bufferAspect = surfaceTexture.mHeight > 0
                         ? surfaceTexture.mWidth / (float) surfaceTexture.mHeight : 4.0f / 3.0f;
                 final float contentAspect = stereo
-                        ? bufferAspect / mQuestVrConfiguration.stereoSourceWidthScale
+                        ? bufferAspect * 0.5f
                         : bufferAspect;
                 QuestVrDiagnostics.info(TAG, "OpenXR source handoff actualProducer=" +
                         surfaceTexture.mWidth + "x" + surfaceTexture.mHeight +
                         " consumerRequest=" + width + "x" + height + " stereo=" + stereo +
-                        " widthScale=" + mQuestVrConfiguration.stereoSourceWidthScale +
-                        " contentAspect=" + contentAspect);
+                        " totalAspect=" + bufferAspect + " perEye=" +
+                        (stereo ? surfaceTexture.mWidth / 2 : surfaceTexture.mWidth) + "x" +
+                        surfaceTexture.mHeight + " contentAspect=" + contentAspect);
                 QuestVrBridge.setSourceTexture(mShaderDrawer.getSourceTextureId(),
                         surfaceTexture.mWidth, surfaceTexture.mHeight,
                         stereo, contentAspect);

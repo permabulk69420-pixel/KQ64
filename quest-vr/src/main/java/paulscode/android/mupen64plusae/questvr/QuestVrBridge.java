@@ -167,12 +167,15 @@ public final class QuestVrBridge {
 
     public static void configure(QuestVrSettings.Configuration configuration) {
         if (sLibraryLoaded) {
-            QuestVrDiagnostics.info(TAG, "Effective presentation screenScale=" +
+            QuestVrDiagnostics.info(TAG, "Effective presentation mode=" +
+                    configuration.presentationModeName + " immersiveViewScale=" +
+                    configuration.immersiveViewScale + " screenScale=" +
                     configuration.screenScale + " screenDistance=" +
                     configuration.screenDistanceMeters + "m startupProofLayers=" +
                     configuration.startupProofLayers + " stereo=" +
                     configuration.stereoEnabled);
             nativeConfigure(configuration.stereoEnabled, configuration.swapEyes, configuration.ipdMeters,
+                    configuration.presentationMode, configuration.immersiveViewScale,
                     configuration.screenScale, configuration.screenDistanceMeters,
                     configuration.startupProofLayers,
                     configuration.worldUnitsPerMeter, configuration.rotationStrength,
@@ -229,6 +232,7 @@ public final class QuestVrBridge {
             boolean requestStereo, float contentAspect);
     private static native void nativeOnSourceFrameLatched(long textureTimestampNanos);
     private static native void nativeConfigure(boolean stereoEnabled, boolean swapEyes, float ipdMeters,
+            int presentationMode, float immersiveViewScale,
             float screenScale, float screenDistanceMeters, boolean startupProofLayers,
             float worldUnitsPerMeter, float rotationStrength, boolean positionEnabled,
             float maxTranslationMeters, float cameraOffsetXMeters, float cameraOffsetYMeters,

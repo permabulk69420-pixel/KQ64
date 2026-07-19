@@ -203,6 +203,13 @@ void BufferedDrawer::_updateTrianglesBuffers(const graphics::Context::DrawTriang
 
 void BufferedDrawer::drawTriangles(const graphics::Context::DrawTriangleParameters & _params)
 {
+	u32 modifiedPositionVertices = 0;
+	for (u32 index = 0; index < _params.verticesCount; ++index) {
+		if ((_params.vertices[index].modify & 0xFFU) != 0)
+			++modifiedPositionVertices;
+	}
+	QuestVr::noteGeometryVertices(_params.verticesCount, modifiedPositionVertices);
+
 	_updateTrianglesBuffers(_params);
 
 	if (isHWLightingAllowed())
@@ -256,6 +263,13 @@ void BufferedDrawer::drawTriangles(const graphics::Context::DrawTriangleParamete
 
 void BufferedDrawer::drawLine(f32 _width, SPVertex * _vertices)
 {
+	u32 modifiedPositionVertices = 0;
+	for (u32 index = 0; index < 2; ++index) {
+		if ((_vertices[index].modify & 0xFFU) != 0)
+			++modifiedPositionVertices;
+	}
+	QuestVr::noteGeometryVertices(2, modifiedPositionVertices);
+
 	const BuffersType type = BuffersType::triangles;
 
 	if (m_type != type) {
