@@ -68,8 +68,9 @@ private:
 };
 
 /**
- * Duplicates a GL draw into side-by-side eye viewports. Geometry scopes also
- * upload the current head/eye clip transform to GLideN64 combiner shaders.
+ * Duplicates a GL draw into side-by-side eye viewports. Geometry scopes upload
+ * the current head/eye clip transform; selected screen-space scopes instead
+ * apply only the OpenXR optical-centre correction needed for binocular fusion.
  */
 class DrawScope {
 public:
