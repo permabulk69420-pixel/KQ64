@@ -2,7 +2,8 @@
 
 ## Status
 
-Branch: `quest-vr-prototype`
+Audit branch: `ppsspp-openxr-audit` (based directly on `quest-vr-prototype` at
+`ba0b775d596a0a79f0cf46201b045140229719bc`)
 
 Primary target: Meta Quest 3, GLideN64, Mario Kart 64 (one-player Time Trial on Luigi Raceway).
 
@@ -57,7 +58,12 @@ flags. The current build fixes that blind spot and the Android launch mismatch:
 - session, `shouldRender`, locate-view fallback, first-layer, EGL, GLES, and OpenXR failures now leave
   concise logcat breadcrumbs.
 
-This build still needs a Quest 3 retest. Treat it as an instrumented prototype rather than a release.
+The PPSSPP comparison and current proof sequence are documented in
+[`PPSSPP_OPENXR_AUDIT.md`](PPSSPP_OPENXR_AUDIT.md). The audit build first submits a bright green
+head-locked quad, then red/blue projection views, then the emulator source when new SurfaceTexture
+frames are proven. Each interval counts only while the session is VISIBLE/FOCUSED, and source-shader
+failure can no longer prevent the diagnostic layers. This build still needs a Quest 3 retest. Treat
+it as an instrumented prototype rather than a release.
 
 ## Existing renderer architecture
 
@@ -211,6 +217,9 @@ Prototype diagnostics log average `xrWaitFrame` time, native frame-loop work tim
 work-time sample, source/swapchain dimensions, geometry/rectangle/eye draw totals, the last stereo
 target width, and any render-target dimension fallbacks. GLES and incomplete-framebuffer failures
 are always logged even when periodic diagnostics are disabled.
+
+The latest session also writes a line-flushed persistent report. Export it without ADB from
+**Gallery drawer → Display → Quest VR prototype → Export latest VR diagnostic**.
 
 ## Build and CI
 
