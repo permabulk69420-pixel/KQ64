@@ -275,6 +275,11 @@
     <string name="questVrTouch_summary">Map OpenXR Touch actions into normal N64 player-one input.</string>
     <string name="questVrDebug_title">Periodic VR diagnostics</string>
     <string name="questVrDebug_summary">Log pose association, draw counts, target sizes, and native frame timing.</string>
+    <string name="questVrExport_title">Export latest VR diagnostic</string>
+    <string name="questVrExport_summary">Share the persistent lifecycle, EGL, OpenXR, swapchain, and SurfaceTexture report without ADB.</string>
+    <string name="questVrExport_chooser">Share Quest/OpenXR diagnostic</string>
+    <string name="questVrExport_empty">No Quest VR diagnostic has been recorded yet.</string>
+    <string name="questVrExport_failed">The Quest VR diagnostic could not be shared.</string>
 
     <string name="categoryData_title">Data</string>
     <string name="categoryNetplay_title">Netplay</string>

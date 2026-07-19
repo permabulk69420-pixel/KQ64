@@ -89,6 +89,7 @@ import paulscode.android.mupen64plusae.persistent.GlobalPrefs;
 import paulscode.android.mupen64plusae.jni.CoreTypes.PakType;
 import paulscode.android.mupen64plusae.profile.ControllerProfile;
 import paulscode.android.mupen64plusae.questvr.QuestVrBridge;
+import paulscode.android.mupen64plusae.questvr.QuestVrDiagnostics;
 import paulscode.android.mupen64plusae.questvr.QuestVrSettings;
 import paulscode.android.mupen64plusae.util.CountryCode;
 import paulscode.android.mupen64plusae.util.DisplayResolutionData;
@@ -174,6 +175,7 @@ public class GameActivity extends AppCompatActivity implements PromptConfirmList
     private boolean mIsNetplayEnabled = false;
     private boolean mIsNetplayServer = false;
     private boolean mForceExit = false;
+    private boolean mQuestVrDiagnosticSession = false;
     private int mServerPort = 0;
 
     // App data and user preferences
@@ -235,6 +237,7 @@ public class GameActivity extends AppCompatActivity implements PromptConfirmList
     protected void onNewIntent( Intent intent )
     {
         Log.i(TAG, "onNewIntent");
+        logQuestVrLifecycle("onNewIntent action=" + intent.getAction());
         // If the activity is already running and is launched again (e.g. from a file manager app),
         // the existing instance will be reused rather than a new one created. This behavior is
         // specified in the manifest (launchMode = singleTask). In that situation, any activities
@@ -268,6 +271,15 @@ public class GameActivity extends AppCompatActivity implements PromptConfirmList
     public void onCreate(Bundle savedInstanceState) {
         Log.i(TAG, "onCreate");
         super.onCreate(savedInstanceState);
+        final QuestVrSettings.Configuration launchVr = QuestVrSettings.load(this);
+        mQuestVrDiagnosticSession = launchVr.enabled && QuestVrBridge.isDeviceCapable(this);
+        if (mQuestVrDiagnosticSession) {
+            final Intent launchIntent = getIntent();
+            QuestVrDiagnostics.startSession(this,
+                    "GameActivity action=" + (launchIntent == null ? null : launchIntent.getAction()) +
+                            " restored=" + (savedInstanceState != null));
+            logQuestVrLifecycle("onCreate after super");
+        }
         super.setTheme( androidx.appcompat.R.style.Theme_AppCompat_NoActionBar );
 
         mAppData = new AppData( this );
@@ -543,6 +555,8 @@ public class GameActivity extends AppCompatActivity implements PromptConfirmList
     {
         super.onStart();
         Log.i(TAG, "onStart");
+        logQuestVrLifecycle("onStart finishing=" + isFinishing() +
+                " destroyed=" + isDestroyed());
 
         final FragmentManager fm = this.getSupportFragmentManager();
 
@@ -600,6 +614,7 @@ public class GameActivity extends AppCompatActivity implements PromptConfirmList
     {
         super.onResume();
         Log.i(TAG, "onResume");
+        logQuestVrLifecycle("onResume focus=" + hasWindowFocus());
 
         if (mSensorController != null) {
             mSensorController.onResume();
@@ -626,6 +641,7 @@ public class GameActivity extends AppCompatActivity implements PromptConfirmList
     public void onPause() {
         super.onPause();
         Log.i(TAG, "onPause");
+        logQuestVrLifecycle("onPause focus=" + hasWindowFocus());
     }
 
     @Override
@@ -644,9 +660,16 @@ public class GameActivity extends AppCompatActivity implements PromptConfirmList
 
         Log.i( TAG, "onStop" );
 
+        final boolean transientQuestVrStop =
+                QuestVrBridge.shouldRetainRenderThreadOnSurfaceLoss() &&
+                !QuestVrBridge.isExitRequested() && !isFinishing() && !isDestroyed();
+        logQuestVrLifecycle("onStop changingConfigurations=" + isChangingConfigurations() +
+                " finishing=" + isFinishing() + " destroyed=" + isDestroyed() +
+                " transientQuestVrStop=" + transientQuestVrStop);
+
         //Don't pause emulation when rotating the screen or the core fragment has been set to null
         //on a shutdown
-        if(!this.isChangingConfigurations() && mCoreFragment != null)
+        if(!transientQuestVrStop && !this.isChangingConfigurations() && mCoreFragment != null)
         {
             if(mGlobalPrefs.maxAutoSaves != 0)
             {
@@ -654,6 +677,9 @@ public class GameActivity extends AppCompatActivity implements PromptConfirmList
             }
 
             mCoreFragment.pauseEmulator();
+        } else if (transientQuestVrStop) {
+            QuestVrDiagnostics.info(TAG,
+                    "Keeping emulator producer running during transient OpenXR Activity stop");
         }
 
         if (mSensorController != null) {
@@ -668,6 +694,8 @@ public class GameActivity extends AppCompatActivity implements PromptConfirmList
     public void onDestroy()
     {
         Log.i( TAG, "onDestroy" );
+        logQuestVrLifecycle("onDestroy entry finishing=" + isFinishing() +
+                " destroyed=" + isDestroyed());
 
         super.onDestroy();
 
@@ -687,9 +715,18 @@ public class GameActivity extends AppCompatActivity implements PromptConfirmList
     {
         // Only try to run; don't try to pause. User may just be touching the in-game menu.
         Log.i( TAG, "onWindowFocusChanged: " + hasFocus );
+        logQuestVrLifecycle("onWindowFocusChanged hasFocus=" + hasFocus);
         if( hasFocus )
         {
             hideSystemBars();
+        }
+    }
+
+    private void logQuestVrLifecycle(String message)
+    {
+        if (mQuestVrDiagnosticSession ||
+                QuestVrBridge.shouldRetainRenderThreadOnSurfaceLoss()) {
+            QuestVrDiagnostics.info(TAG, message);
         }
     }
 

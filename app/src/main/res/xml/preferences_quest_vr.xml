@@ -121,6 +121,11 @@
             android:key="debug_logging"
             android:summary="@string/questVrDebug_summary"
             android:title="@string/questVrDebug_title" />
+        <androidx.preference.Preference
+            android:key="export_diagnostics"
+            android:persistent="false"
+            android:summary="@string/questVrExport_summary"
+            android:title="@string/questVrExport_title" />
     </androidx.preference.PreferenceCategory>
 
 </androidx.preference.PreferenceScreen>
