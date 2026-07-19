@@ -104,13 +104,13 @@
             android:summary="@string/questVrMarioKart_summary"
             android:title="@string/questVrMarioKart_title" />
         <androidx.preference.EditTextPreference
-            android:defaultValue="-0.20"
+            android:defaultValue="0.0"
             android:inputType="numberDecimal|numberSigned"
             android:key="mario_kart_camera_offset_y_meters"
             android:summary="@string/questVrMarioKartY_summary"
             android:title="@string/questVrMarioKartY_title" />
         <androidx.preference.EditTextPreference
-            android:defaultValue="-0.75"
+            android:defaultValue="0.0"
             android:inputType="numberDecimal|numberSigned"
             android:key="mario_kart_camera_offset_z_meters"
             android:summary="@string/questVrMarioKartZ_summary"

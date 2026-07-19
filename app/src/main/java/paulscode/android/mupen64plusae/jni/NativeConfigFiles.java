@@ -38,6 +38,8 @@ import paulscode.android.mupen64plusae.persistent.GLideN64Prefs;
 import paulscode.android.mupen64plusae.persistent.GamePrefs;
 import paulscode.android.mupen64plusae.persistent.GlobalPrefs;
 import paulscode.android.mupen64plusae.questvr.QuestVrDiagnostics;
+import paulscode.android.mupen64plusae.questvr.QuestVrBridge;
+import paulscode.android.mupen64plusae.questvr.QuestVrSettings;
 
 class NativeConfigFiles
 {
@@ -67,6 +69,27 @@ class NativeConfigFiles
         QuestVrDiagnostics.info("NativeConfigFiles", "Writing renderer target ScreenWidth=" +
                 renderWidth + " ScreenHeight=" + renderHeight + " pixels=" +
                 ((long) renderWidth * renderHeight));
+
+        final QuestVrSettings.Configuration questVr = QuestVrSettings.load(context);
+        // A packed stereo target is always twice the per-eye content aspect.  Requiring that
+        // shape in addition to the explicit VR/plugin gates keeps an OpenXR failure capable of
+        // falling back to the same high-resolution Android producer without changing ordinary
+        // flat launches.
+        final boolean packedQuestVrTarget = questVr.enabled && questVr.stereoEnabled &&
+                QuestVrBridge.isNativeLibraryLoaded() &&
+                game.videoPluginLib == AppData.VideoPlugin.GLIDEN64 &&
+                renderHeight > 0 && renderWidth >= renderHeight * 2;
+        final int requestedNativeResolutionFactor =
+                game.glideN64Prefs.useNativeResolutionFactor;
+        final int effectiveNativeResolutionFactor = packedQuestVrTarget ? 0 :
+                requestedNativeResolutionFactor;
+        QuestVrDiagnostics.info("NativeConfigFiles", "GLideN64 internal resolution " +
+                "requestedNativeFactor=" + requestedNativeResolutionFactor +
+                " effectiveNativeFactor=" + effectiveNativeResolutionFactor +
+                " packedQuestVrTarget=" + packedQuestVrTarget +
+                " targetAspect=" + (renderHeight > 0 ? renderWidth / (float) renderHeight : 0.0f) +
+                " reason=" + (packedQuestVrTarget ?
+                "VR SBS uses window-derived per-eye scale" : "flat/profile setting preserved"));
 
         supportsFullGl = AppData.doesSupportFullGL();
 
@@ -262,7 +285,16 @@ class NativeConfigFiles
         putGLideN64Setting(mupen64plus_cfg, glideN64_conf, game, "EnableCopyColorFromRDRAM", boolToTF( game.glideN64Prefs.enableCopyColorFromRDRAM ) );
         putGLideN64Setting(mupen64plus_cfg, glideN64_conf, game, "EnableN64DepthCompare", String.valueOf(game.glideN64Prefs.enableN64DepthCompare ? 1 : 0) );
         putGLideN64Setting(mupen64plus_cfg, glideN64_conf, game, "ForceDepthBufferClear", boolToTF( game.glideN64Prefs.forceDepthBufferClear ) );
-        putGLideN64Setting(mupen64plus_cfg, glideN64_conf, game, "UseNativeResolutionFactor", String.valueOf( game.glideN64Prefs.useNativeResolutionFactor ) );
+        putGLideN64Setting(mupen64plus_cfg, glideN64_conf, game,
+                "UseNativeResolutionFactor", String.valueOf(effectiveNativeResolutionFactor));
+        if (packedQuestVrTarget) {
+            // Game-specific GLideN64 custom entries are normally authoritative.  For a packed
+            // Quest target, factor 1 is precisely the diagnosed native-resolution upscale bug,
+            // so make the scoped VR override authoritative after custom.ini has been consulted.
+            mupen64plus_cfg.put("Video-GLideN64", "UseNativeResolutionFactor", "0");
+            QuestVrDiagnostics.info("NativeConfigFiles",
+                    "Committed packed Quest GLideN64 UseNativeResolutionFactor=0");
+        }
         putGLideN64Setting(mupen64plus_cfg, glideN64_conf, game, "txFilterMode", String.valueOf( game.glideN64Prefs.txFilterMode ) );
         putGLideN64Setting(mupen64plus_cfg, glideN64_conf, game, "txEnhancementMode", String.valueOf( game.glideN64Prefs.txEnhancementMode ) );
         putGLideN64Setting(mupen64plus_cfg, glideN64_conf, game, "txDeposterize", boolToTF( game.glideN64Prefs.txDeposterize ) );

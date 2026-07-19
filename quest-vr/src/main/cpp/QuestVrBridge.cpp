@@ -92,6 +92,21 @@ using GetVrStatsFn = void (*)(uint32_t* geometryDraws, uint32_t* rectangleDraws,
                               uint32_t* framebufferBlits,
                               uint32_t* backgroundRectangles,
                               uint32_t* sprite2DCommands);
+using GetVrPipelineStatsFn = void (*)(uint32_t* canonicalPerspectiveDraws,
+                                      uint32_t* foldedPerspectiveDraws,
+                                      uint32_t* projectionLoads,
+                                      uint32_t* foldedProjectionMultiplies,
+                                      uint32_t* framebufferAllocations,
+                                      uint32_t* framebufferN64Width,
+                                      uint32_t* framebufferN64Height,
+                                      uint32_t* framebufferPhysicalWidth,
+                                      uint32_t* framebufferPhysicalHeight,
+                                      uint32_t* framebufferScaleMilli,
+                                      uint32_t* nativeResolutionFactor,
+                                      uint32_t* viewportWidth,
+                                      uint32_t* viewportHeight,
+                                      uint32_t* scissorWidth,
+                                      uint32_t* scissorHeight);
 using GetPresentedPoseTimestampFn = int64_t (*)();
 using SetVrInputFn = void (*)(int enabled, uint32_t buttonMask, float analogX, float analogY);
 
@@ -163,6 +178,7 @@ struct State {
     ConfigureVrFn configureVr{nullptr};
     RecenterVrFn recenterVr{nullptr};
     GetVrStatsFn getVrStats{nullptr};
+    GetVrPipelineStatsFn getVrPipelineStats{nullptr};
     GetPresentedPoseTimestampFn getPresentedPoseTimestamp{nullptr};
     SetVrInputFn setVrInput{nullptr};
     void* rendererLibraryHandle{nullptr};
@@ -190,8 +206,8 @@ struct State {
     float configurationCameraOffsetZ{0.0f};
     bool configurationUseOpenXrFov{true};
     bool configurationMarioKartProfileEnabled{true};
-    float configurationMarioKartCameraOffsetY{-0.20f};
-    float configurationMarioKartCameraOffsetZ{-0.75f};
+    float configurationMarioKartCameraOffsetY{0.0f};
+    float configurationMarioKartCameraOffsetZ{0.0f};
     bool touchControllerEnabled{true};
     bool debugLogging{false};
     XrPosef screenPose{};
@@ -647,6 +663,8 @@ void resolveRendererBridge() {
     g.configureVr = reinterpret_cast<ConfigureVrFn>(dlsym(symbolScope, "M64PQuestVrConfigure"));
     g.recenterVr = reinterpret_cast<RecenterVrFn>(dlsym(symbolScope, "M64PQuestVrRecenter"));
     g.getVrStats = reinterpret_cast<GetVrStatsFn>(dlsym(symbolScope, "M64PQuestVrGetStats"));
+    g.getVrPipelineStats = reinterpret_cast<GetVrPipelineStatsFn>(
+        dlsym(symbolScope, "M64PQuestVrGetPipelineStats"));
     g.getPresentedPoseTimestamp = reinterpret_cast<GetPresentedPoseTimestampFn>(
         dlsym(symbolScope, "M64PQuestVrGetPresentedPoseTimestamp"));
 
@@ -890,12 +908,36 @@ void publishHeadPose(XrTime displayTime, uint32_t viewCount) {
         uint32_t framebufferBlits = 0;
         uint32_t backgroundRectangles = 0;
         uint32_t sprite2DCommands = 0;
+        uint32_t canonicalPerspectiveDraws = 0;
+        uint32_t foldedPerspectiveDraws = 0;
+        uint32_t projectionLoads = 0;
+        uint32_t foldedProjectionMultiplies = 0;
+        uint32_t framebufferAllocations = 0;
+        uint32_t framebufferN64Width = 0;
+        uint32_t framebufferN64Height = 0;
+        uint32_t framebufferPhysicalWidth = 0;
+        uint32_t framebufferPhysicalHeight = 0;
+        uint32_t framebufferScaleMilli = 0;
+        uint32_t nativeResolutionFactor = 0;
+        uint32_t viewportWidth = 0;
+        uint32_t viewportHeight = 0;
+        uint32_t scissorWidth = 0;
+        uint32_t scissorHeight = 0;
         if (g.getVrStats != nullptr) {
             g.getVrStats(&geometryDraws, &rectangleDraws, &eyeDraws, &poseGeneration,
                          &targetWidthFallbacks, &lastTargetWidth, &perspectiveDraws,
                          &orthographicDraws, &missingTransformProgramDraws,
                          &geometryVertices, &modifiedPositionVertices, &framebufferBlits,
                          &backgroundRectangles, &sprite2DCommands);
+        }
+        if (g.getVrPipelineStats != nullptr) {
+            g.getVrPipelineStats(&canonicalPerspectiveDraws, &foldedPerspectiveDraws,
+                                 &projectionLoads, &foldedProjectionMultiplies,
+                                 &framebufferAllocations, &framebufferN64Width,
+                                 &framebufferN64Height, &framebufferPhysicalWidth,
+                                 &framebufferPhysicalHeight, &framebufferScaleMilli,
+                                 &nativeResolutionFactor, &viewportWidth, &viewportHeight,
+                                 &scissorWidth, &scissorHeight);
         }
         float runtimeIpd = 0.0f;
         if (viewCount >= 2) {
@@ -910,17 +952,26 @@ void publishHeadPose(XrTime displayTime, uint32_t viewCount) {
              "runtimeIpd=%.4f fovL=[%.3f %.3f %.3f %.3f], "
              "draws geometry=%u perspective=%u orthographic=%u rect=%u "
              "backgroundRect=%u sprite2D=%u blits=%u "
+             "projection canonical=%u foldedView=%u loads=%u foldedMultiplies=%u "
              "missingTransformProgram=%u vertices=%u modifiedXY=%u eyes=%u "
-             "poseGeneration=%u targetWidth=%u targetFallbacks=%u",
+             "poseGeneration=%u targetWidth=%u targetFallbacks=%u "
+             "internalFbo allocations=%u n64=%ux%u packed=%ux%u perEye=%ux%u "
+             "scale=%.3f nativeFactor=%u viewport=%ux%u scissor=%ux%u",
              pose.orientation.x, pose.orientation.y, pose.orientation.z, pose.orientation.w,
              position.x, position.y, position.z, runtimeIpd,
              g.views[0].fov.angleLeft, g.views[0].fov.angleRight,
              g.views[0].fov.angleUp, g.views[0].fov.angleDown,
              geometryDraws, perspectiveDraws, orthographicDraws, rectangleDraws,
              backgroundRectangles, sprite2DCommands, framebufferBlits,
+             canonicalPerspectiveDraws, foldedPerspectiveDraws, projectionLoads,
+             foldedProjectionMultiplies,
              missingTransformProgramDraws, geometryVertices,
              modifiedPositionVertices, eyeDraws, poseGeneration, lastTargetWidth,
-             targetWidthFallbacks);
+             targetWidthFallbacks, framebufferAllocations, framebufferN64Width,
+             framebufferN64Height, framebufferPhysicalWidth, framebufferPhysicalHeight,
+             framebufferPhysicalWidth / 2, framebufferPhysicalHeight,
+             framebufferScaleMilli / 1000.0f, nativeResolutionFactor,
+             viewportWidth, viewportHeight, scissorWidth, scissorHeight);
     }
 }
 
@@ -1658,7 +1709,8 @@ Java_paulscode_android_mupen64plusae_questvr_QuestVrBridge_nativeConfigure(
          "swapEyes=%d ipd=%.4f screenScale=%.3f "
          "screenDistance=%.3fm proofLayers=%d worldUnits=%.2f "
          "rotationUser=%.2f rotationLateClip=%.2f "
-         "position=%d maxTranslation=%.3f sourceBlitReady=%d debug=%d",
+         "position=%d maxTranslation=%.3f useOpenXrFov=%d marioKartProfile=%d "
+         "marioKartOffsetYZ=[%.3f %.3f] sourceBlitReady=%d debug=%d",
          presentationModeName(g.configurationPresentationMode),
          g.configurationImmersiveViewScale,
          g.configurationStereoEnabled ? 1 : 0, g.configurationSwapEyes ? 1 : 0,
@@ -1667,7 +1719,10 @@ Java_paulscode_android_mupen64plusae_questvr_QuestVrBridge_nativeConfigure(
          g.configurationStartupProofLayers ? 1 : 0, g.configurationWorldUnitsPerMeter,
          g.configurationRotationStrength, -g.configurationRotationStrength,
          g.configurationPositionEnabled ? 1 : 0,
-         g.configurationMaxTranslationMeters, g.sourceBlitReady ? 1 : 0,
+         g.configurationMaxTranslationMeters, g.configurationUseOpenXrFov ? 1 : 0,
+         g.configurationMarioKartProfileEnabled ? 1 : 0,
+         g.configurationMarioKartCameraOffsetY, g.configurationMarioKartCameraOffsetZ,
+         g.sourceBlitReady ? 1 : 0,
          g.debugLogging ? 1 : 0);
     if (g.configureVr != nullptr) {
         g.configureVr(g.configurationStereoEnabled ? 1 : 0, g.configurationIpdMeters,

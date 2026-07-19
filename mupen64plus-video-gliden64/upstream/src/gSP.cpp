@@ -130,6 +130,7 @@ f32 identityMatrix[4][4] =
 
 void gSPLoadUcodeEx( u32 uc_start, u32 uc_dstart, u16 uc_dsize )
 {
+	QuestVr::resetProjectionTracking();
 	gSP.matrix.modelViewi = 0;
 	gSP.status[0] = gSP.status[1] = gSP.status[2] = gSP.status[3] = 0;
 	gSP.fog.multiplier = gSP.fog.offset = 0;
@@ -174,6 +175,8 @@ void gSPMatrix( u32 matrix, u8 param )
 	RSP_LoadMatrix( mtx, address );
 
 	if (param & G_MTX_PROJECTION) {
+		QuestVr::noteProjectionMatrix(reinterpret_cast<const float*>(mtx),
+			(param & G_MTX_LOAD) != 0);
 		if (param & G_MTX_LOAD)
 			CopyMatrix( gSP.matrix.projection, mtx );
 		else
@@ -233,6 +236,7 @@ void gSPDMAMatrix( u32 matrix, u8 index, u8 multiply )
 		CopyMatrix( gSP.matrix.modelView[gSP.matrix.modelViewi], mtx );
 
 	CopyMatrix( gSP.matrix.projection, identityMatrix );
+	QuestVr::resetProjectionTracking();
 
 
 	gSP.changed |= CHANGED_MATRIX | CHANGED_LIGHT | CHANGED_LOOKAT;

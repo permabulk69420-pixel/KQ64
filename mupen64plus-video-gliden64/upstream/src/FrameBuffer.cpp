@@ -18,6 +18,7 @@
 #include "FrameBufferInfo.h"
 #include "Log.h"
 #include "MemoryStatus.h"
+#include "QuestVr.h"
 
 #include "BufferCopy/ColorBufferToRDRAM.h"
 #include "BufferCopy/DepthBufferToRDRAM.h"
@@ -65,8 +66,11 @@ static
 void _initFrameBufferTexture(u32 _address, u16 _width, u16 _height, f32 _scale, u16 _format, u16 _size, CachedTexture *_pTexture)
 {
 	const FramebufferTextureFormats & fbTexFormats = gfxContext.getFramebufferTextureFormats();
+	const u32 horizontalMultiplier = QuestVr::framebufferWidthMultiplier();
+	const f32 horizontalScale = _scale * static_cast<f32>(horizontalMultiplier);
 
-	_pTexture->width = static_cast<u16>(static_cast<u32>(static_cast<f32>(_width) * _scale));
+	_pTexture->width = static_cast<u16>(static_cast<u32>(
+		static_cast<f32>(_width) * horizontalScale));
 	_pTexture->height = static_cast<u16>(static_cast<u32>(static_cast<f32>(_height) * _scale));
 	_pTexture->format = _format;
 	_pTexture->size = _size;
@@ -81,8 +85,10 @@ void _initFrameBufferTexture(u32 _address, u16 _width, u16 _height, f32 _scale, 
 	_pTexture->mirrorS = 0;
 	_pTexture->mirrorT = 0;
 	_pTexture->textureBytes = _pTexture->width * _pTexture->height;
-	_pTexture->hdRatioS = _scale;
+	_pTexture->hdRatioS = horizontalScale;
 	_pTexture->hdRatioT = _scale;
+	if (horizontalMultiplier > 1U)
+		QuestVr::markPackedFramebufferTexture(_pTexture->name);
 	if (_size > G_IM_SIZ_8b)
 		_pTexture->textureBytes *= fbTexFormats.colorFormatBytes;
 	else
@@ -159,7 +165,7 @@ void FrameBuffer::init(u32 _address, u16 _format, u16 _size, u16 _width, bool _c
 	} else if (config.frameBufferEmulation.nativeResFactor != 0 && config.frameBufferEmulation.enable != 0) {
 		m_scale = static_cast<float>(config.frameBufferEmulation.nativeResFactor);
 	} else {
-		m_scale = std::max(dwnd().getScaleX(), 1.0f);
+		m_scale = QuestVr::framebufferScale(dwnd().getScaleX(), dwnd().getScaleY());
 	}
 	m_cfb = _cfb;
 	m_cleared = false;
@@ -168,6 +174,9 @@ void FrameBuffer::init(u32 _address, u16 _format, u16 _size, u16 _width, bool _c
 
 	const u16 maxHeight = VI_GetMaxBufferHeight(_width);
 	_initTexture(_width, maxHeight, _format, _size, m_pTexture);
+	QuestVr::noteFramebufferAllocation(_width, maxHeight, m_scale,
+		m_pTexture->width, m_pTexture->height,
+		static_cast<unsigned int>(config.frameBufferEmulation.nativeResFactor));
 
 	if (config.video.multisampling != 0) {
 		_setAndAttachTexture(m_FBO, m_pTexture, 0, true);
@@ -384,7 +393,7 @@ CachedTexture * FrameBuffer::_getSubTexture(u32 _t)
 	if (!_initSubTexture(_t))
 		return m_pTexture;
 
-	s32 x0 = static_cast<s32>(m_pTexture->offsetS * m_scale);
+	s32 x0 = static_cast<s32>(m_pTexture->offsetS * m_pTexture->hdRatioS);
 	s32 y0 = static_cast<s32>(m_pTexture->offsetT * m_scale);
 	s32 copyWidth = m_pSubTexture->width;
 	if (x0 + copyWidth > m_pTexture->width)
@@ -496,8 +505,8 @@ CachedTexture * FrameBuffer::getTexture(u32 _t)
 	if (!getDepthTexture && (gSP.textureTile[_t]->clamps == 0 || gSP.textureTile[_t]->clampt == 0))
 		pTexture = _getSubTexture(_t);
 
-	pTexture->scaleS = m_scale / static_cast<f32>(pTexture->width);
-	pTexture->scaleT = m_scale / static_cast<f32>(pTexture->height);
+	pTexture->scaleS = pTexture->hdRatioS / static_cast<f32>(pTexture->width);
+	pTexture->scaleT = pTexture->hdRatioT / static_cast<f32>(pTexture->height);
 
 	pTexture->shiftScaleS = calcShiftScaleS(*gSP.textureTile[_t]);
 	pTexture->shiftScaleT = calcShiftScaleT(*gSP.textureTile[_t]);
@@ -516,8 +525,8 @@ CachedTexture * FrameBuffer::getTextureBG()
 			pTexture = _copyFrameBufferTexture();
 	}
 
-	pTexture->scaleS = m_scale / static_cast<f32>(pTexture->width);
-	pTexture->scaleT = m_scale / static_cast<f32>(pTexture->height);
+	pTexture->scaleS = pTexture->hdRatioS / static_cast<f32>(pTexture->width);
+	pTexture->scaleT = pTexture->hdRatioT / static_cast<f32>(pTexture->height);
 
 	pTexture->shiftScaleS = 1.0f;
 	pTexture->shiftScaleT = 1.0f;
@@ -813,8 +822,12 @@ void FrameBufferList::saveBuffer(u32 _address, u16 _format, u16 _size, u16 _widt
 	}
 
 	const float scaleX = config.frameBufferEmulation.nativeResFactor == 0 ?
-		wnd.getScaleX() :
+		QuestVr::framebufferScale(wnd.getScaleX(), wnd.getScaleY()) :
 		static_cast<float>(config.frameBufferEmulation.nativeResFactor);
+	const float expectedHorizontalScale = scaleX * static_cast<float>(
+		QuestVr::framebufferWidthMultiplier());
+	const u32 expectedPhysicalWidth = static_cast<u32>(
+		static_cast<float>(_width) * expectedHorizontalScale);
 
 	if (m_pCurrent == nullptr || m_pCurrent->m_startAddress != _address || m_pCurrent->m_width != _width)
 		m_pCurrent = findBuffer(_address);
@@ -868,7 +881,8 @@ void FrameBufferList::saveBuffer(u32 _address, u16 _format, u16 _size, u16 _widt
 			}
 		} else if ((m_pCurrent->m_width != _width) ||
 					(m_pCurrent->m_size < _size) ||
-					(m_pCurrent->m_scale != scaleX)) {
+					(m_pCurrent->m_scale != scaleX) ||
+					(m_pCurrent->m_pTexture->width != expectedPhysicalWidth)) {
 			removeBuffer(m_pCurrent->m_startAddress);
 			m_pCurrent = nullptr;
 		} else {

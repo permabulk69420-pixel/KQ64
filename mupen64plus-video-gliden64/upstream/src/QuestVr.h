@@ -4,6 +4,24 @@ namespace QuestVr {
 
 bool isStereoEnabled();
 
+/**
+ * Records projection-matrix commands before GLideN64 mutates its active matrix.
+ * Mario Kart 64 commonly loads guPerspective and then multiplies guLookAt into
+ * the projection stack.  Retaining the first matrix lets the late eye transform
+ * recover camera space without mistaking the folded result for an orthographic
+ * HUD projection.
+ */
+void noteProjectionMatrix(const float* matrix, bool load);
+void resetProjectionTracking();
+
+/** Physical horizontal packing used by GLideN64 framebuffer objects in SBS mode. */
+unsigned int framebufferWidthMultiplier();
+float framebufferScale(float windowScaleX, float windowScaleY);
+void markPackedFramebufferTexture(unsigned int texture);
+void noteFramebufferAllocation(unsigned int n64Width, unsigned int n64Height,
+	float scale, unsigned int physicalWidth, unsigned int physicalHeight,
+	unsigned int nativeResolutionFactor);
+
 void registerProgram(unsigned int program);
 void unregisterProgram(unsigned int program);
 void setCurrentProgram(unsigned int program);
@@ -63,6 +81,7 @@ private:
 	bool m_active;
 	bool m_transformGeometry;
 	int m_targetWidth;
+	int m_coordinateWidth;
 };
 
 } // namespace QuestVr
