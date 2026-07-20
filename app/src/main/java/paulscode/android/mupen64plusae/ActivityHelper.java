@@ -196,10 +196,9 @@ public class ActivityHelper
                 (data.getData() != null || (requestedRom != null && !requestedRom.isEmpty()));
         if (!externalRom && QuestVrBridge.shouldLaunchVrLauncher(context))
         {
+            // The launcher is an ordinary Android panel. GameActivity is the sole immersive
+            // OpenXR Activity, so never mark the launcher Intent as IMMERSIVE_HMD.
             Intent intent = new Intent(context, QuestVrLauncherActivity.class);
-            intent.setAction(ACTION_QUEST_VR_LAUNCHER);
-            intent.addCategory(Intent.CATEGORY_DEFAULT);
-            intent.addCategory(CATEGORY_IMMERSIVE_HMD);
             context.startActivity(intent);
             return;
         }

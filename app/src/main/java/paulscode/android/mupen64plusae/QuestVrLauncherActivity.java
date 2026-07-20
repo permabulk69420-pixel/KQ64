@@ -17,9 +17,14 @@ import android.graphics.RadialGradient;
 import android.graphics.RectF;
 import android.graphics.Shader;
 import android.os.Bundle;
+import android.os.Handler;
 import android.os.IBinder;
+import android.os.Looper;
+import android.os.SystemClock;
 import android.text.TextUtils;
+import android.view.InputDevice;
 import android.view.KeyEvent;
+import android.view.MotionEvent;
 import android.view.View;
 import android.view.WindowManager;
 
@@ -29,7 +34,6 @@ import androidx.annotation.NonNull;
 import androidx.appcompat.app.AppCompatActivity;
 
 import java.io.File;
-import java.lang.ref.WeakReference;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Date;
@@ -38,6 +42,7 @@ import java.util.List;
 import java.util.Map;
 
 import paulscode.android.mupen64plusae.dialog.ProgressDialog;
+import paulscode.android.mupen64plusae.game.GameActivity;
 import paulscode.android.mupen64plusae.persistent.AppData;
 import paulscode.android.mupen64plusae.persistent.ConfigFile;
 import paulscode.android.mupen64plusae.persistent.GlobalPrefs;
@@ -50,14 +55,13 @@ import paulscode.android.mupen64plusae.task.GalleryRefreshTask;
 /**
  * Small Quest-native front door for the existing emulator library.
  *
- * The shell is intentionally a mono Android Canvas surface presented on the proven world-locked
- * OpenXR quad. It never enters GLideN64 and therefore cannot alter packed-SBS game rendering.
+ * The shell is intentionally a normal Android Canvas window. Quest presents it as a floating
+ * system panel, and only GameActivity enters OpenXR. This preserves the custom launcher while
+ * ensuring the launcher and game never compete for immersive runtime ownership.
  */
 public final class QuestVrLauncherActivity extends AppCompatActivity
         implements CacheRomInfoService.CacheRomInfoListener {
     private static final String TAG = "QuestVrLauncher";
-    private static WeakReference<QuestVrLauncherActivity> sActiveInstance =
-            new WeakReference<>(null);
     private static final int ROW_LIBRARY = 0;
     private static final int ROW_MODE = 1;
     private static final int ROW_ACTIONS = 2;
@@ -65,8 +69,12 @@ public final class QuestVrLauncherActivity extends AppCompatActivity
     private static final int ACTION_IMPORT = 1;
     private static final int ACTION_ADVANCED = 2;
     private static final int MAX_ARTWORK_CACHE = 8;
+    private static final long AXIS_REPEAT_INTERVAL_MS = 220L;
+    private static final float AXIS_NAVIGATION_THRESHOLD = 0.62f;
+    private static final float TRIGGER_SELECT_THRESHOLD = 0.72f;
 
     private final Object mMenuLock = new Object();
+    private final Handler mTransitionHandler = new Handler(Looper.getMainLooper());
     private final Map<String, Bitmap> mArtworkCache =
             new LinkedHashMap<String, Bitmap>(MAX_ARTWORK_CACHE, 0.75f, true) {
                 @Override
@@ -84,7 +92,6 @@ public final class QuestVrLauncherActivity extends AppCompatActivity
     private int mSelectedMode;
     private int mSelectedAction;
     private int mFocusRow = ROW_LIBRARY;
-    private int mMenuRevision;
     private boolean mLibraryLoading = true;
     private boolean mScanning;
     private volatile boolean mTransitionPending;
@@ -92,6 +99,8 @@ public final class QuestVrLauncherActivity extends AppCompatActivity
     private ProgressDialog mScanProgress;
     private CacheRomInfoService mScanService;
     private ServiceConnection mScanConnection;
+    private long mNextAxisInputTime;
+    private boolean mTriggerPressed;
 
     private final ActivityResultLauncher<Intent> mScanLauncher = registerForActivityResult(
             new ActivityResultContracts.StartActivityForResult(), result -> {
@@ -103,10 +112,18 @@ public final class QuestVrLauncherActivity extends AppCompatActivity
                 }
             });
 
+    private final ActivityResultLauncher<Intent> mGameLauncher = registerForActivityResult(
+            new ActivityResultContracts.StartActivityForResult(), result -> {
+                QuestVrDiagnostics.info(TAG,
+                        "GameActivity returned result=" + result.getResultCode());
+                mTransitionPending = false;
+                setStatus("Game closed");
+                loadLibraryAsync();
+            });
+
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
-        sActiveInstance = new WeakReference<>(this);
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON |
                 WindowManager.LayoutParams.FLAG_FULLSCREEN);
         getWindow().getDecorView().setSystemUiVisibility(
@@ -125,6 +142,8 @@ public final class QuestVrLauncherActivity extends AppCompatActivity
 
         mVrSurface = new QuestVrLauncherSurface(this);
         setContentView(mVrSurface);
+        QuestVrDiagnostics.info(TAG,
+                "Created Android-panel launcher; OpenXR ownership is reserved for GameActivity");
         loadLibraryAsync();
     }
 
@@ -132,26 +151,18 @@ public final class QuestVrLauncherActivity extends AppCompatActivity
     protected void onResume() {
         super.onResume();
         if (mVrSurface != null && !mTransitionPending) {
-            mVrSurface.resumeVrAfterDelay();
+            mVrSurface.resumePanel();
         }
     }
 
     @Override
     protected void onDestroy() {
+        mTransitionHandler.removeCallbacksAndMessages(null);
         if (mVrSurface != null) {
             mVrSurface.destroyAndWait();
         }
         dismissScanProgress();
         super.onDestroy();
-        if (sActiveInstance.get() == this) {
-            sActiveInstance.clear();
-        }
-        QuestVrGameHandoffActivity.onLauncherDestroyed();
-    }
-
-    static boolean isLifecycleOwnerAlive() {
-        final QuestVrLauncherActivity activity = sActiveInstance.get();
-        return activity != null && !activity.isDestroyed();
     }
 
     @Override
@@ -174,6 +185,8 @@ public final class QuestVrLauncherActivity extends AppCompatActivity
                 input = QuestVrBridge.MENU_INPUT_RIGHT;
                 break;
             case KeyEvent.KEYCODE_BUTTON_A:
+            case KeyEvent.KEYCODE_BUTTON_L1:
+            case KeyEvent.KEYCODE_BUTTON_R1:
             case KeyEvent.KEYCODE_ENTER:
             case KeyEvent.KEYCODE_DPAD_CENTER:
                 input = QuestVrBridge.MENU_INPUT_SELECT;
@@ -192,14 +205,53 @@ public final class QuestVrLauncherActivity extends AppCompatActivity
         return super.dispatchKeyEvent(event);
     }
 
-    boolean isTransitionPending() {
-        return mTransitionPending;
+    @Override
+    public boolean dispatchGenericMotionEvent(MotionEvent event) {
+        if (event.getActionMasked() == MotionEvent.ACTION_MOVE &&
+                (event.getSource() & InputDevice.SOURCE_JOYSTICK) != 0) {
+            final float horizontal = strongestAxis(event, MotionEvent.AXIS_HAT_X,
+                    MotionEvent.AXIS_X);
+            final float vertical = strongestAxis(event, MotionEvent.AXIS_HAT_Y,
+                    MotionEvent.AXIS_Y);
+            final float trigger = Math.max(
+                    Math.max(event.getAxisValue(MotionEvent.AXIS_LTRIGGER),
+                            event.getAxisValue(MotionEvent.AXIS_RTRIGGER)),
+                    Math.max(event.getAxisValue(MotionEvent.AXIS_BRAKE),
+                            event.getAxisValue(MotionEvent.AXIS_GAS)));
+            final long now = SystemClock.uptimeMillis();
+            int input = 0;
+            if (now >= mNextAxisInputTime) {
+                if (Math.abs(horizontal) >= AXIS_NAVIGATION_THRESHOLD &&
+                        Math.abs(horizontal) >= Math.abs(vertical)) {
+                    input = horizontal < 0.0f ? QuestVrBridge.MENU_INPUT_LEFT :
+                            QuestVrBridge.MENU_INPUT_RIGHT;
+                } else if (Math.abs(vertical) >= AXIS_NAVIGATION_THRESHOLD) {
+                    input = vertical < 0.0f ? QuestVrBridge.MENU_INPUT_UP :
+                            QuestVrBridge.MENU_INPUT_DOWN;
+                }
+                if (input != 0) {
+                    mNextAxisInputTime = now + AXIS_REPEAT_INTERVAL_MS;
+                }
+            }
+            if (trigger >= TRIGGER_SELECT_THRESHOLD && !mTriggerPressed) {
+                input |= QuestVrBridge.MENU_INPUT_SELECT;
+            }
+            mTriggerPressed = trigger >= TRIGGER_SELECT_THRESHOLD;
+            if (input != 0) {
+                onVrMenuInput(input);
+                return true;
+            }
+            if (Math.abs(horizontal) < 0.25f && Math.abs(vertical) < 0.25f) {
+                mNextAxisInputTime = 0L;
+            }
+        }
+        return super.dispatchGenericMotionEvent(event);
     }
 
-    int getMenuRevision() {
-        synchronized (mMenuLock) {
-            return mMenuRevision;
-        }
+    private static float strongestAxis(MotionEvent event, int firstAxis, int secondAxis) {
+        final float first = event.getAxisValue(firstAxis);
+        final float second = event.getAxisValue(secondAxis);
+        return Math.abs(first) >= Math.abs(second) ? first : second;
     }
 
     void onVrMenuInput(int input) {
@@ -244,8 +296,8 @@ public final class QuestVrLauncherActivity extends AppCompatActivity
                     }
                 }
             }
-            ++mMenuRevision;
         }
+        requestMenuRedraw();
 
         if (cancelScan) {
             final CacheRomInfoService service = mScanService;
@@ -254,31 +306,64 @@ public final class QuestVrLauncherActivity extends AppCompatActivity
                 setStatus("Cancelling scan");
             }
         } else if (exit) {
-            runOnUiThread(() -> leaveVr(this::finish));
+            runOnUiThread(this::finish);
         } else if (action >= 0) {
             final int selectedAction = action;
             runOnUiThread(() -> performAction(selectedAction));
         }
     }
 
-    void onVrInitializationFailed() {
-        runOnUiThread(() -> {
-            if (isFinishing() || mTransitionPending) {
+    void onPointerLibrarySwipe(int direction) {
+        synchronized (mMenuLock) {
+            if (mTransitionPending || mScanning || mGames.isEmpty()) {
                 return;
             }
-            QuestVrDiagnostics.warn(TAG,
-                    "VR launcher OpenXR initialization failed; opening the legacy gallery");
-            startActivity(new Intent(this, GalleryActivity.class));
-            finish();
-        });
+            mFocusRow = ROW_LIBRARY;
+            mSelectedGame = wrap(mSelectedGame + direction, mGames.size());
+        }
+        requestMenuRedraw();
     }
 
-    void onVrSessionEnded() {
-        runOnUiThread(() -> {
-            if (!isFinishing() && !mTransitionPending) {
-                finish();
+    void onPointerTap(float x, float y) {
+        int action = -1;
+        synchronized (mMenuLock) {
+            if (mTransitionPending) {
+                return;
             }
-        });
+            if (y >= 155.0f && y <= 555.0f) {
+                mFocusRow = ROW_LIBRARY;
+                if (!mGames.isEmpty()) {
+                    if (x >= 80.0f && x <= 390.0f) {
+                        mSelectedGame = wrap(mSelectedGame - 1, mGames.size());
+                    } else if (x >= 1210.0f && x <= 1520.0f) {
+                        mSelectedGame = wrap(mSelectedGame + 1, mGames.size());
+                    }
+                }
+            } else if (y >= 570.0f && y <= 680.0f) {
+                mFocusRow = ROW_MODE;
+                if (x >= 360.0f && x < 800.0f) {
+                    mSelectedMode = 0;
+                } else if (x >= 800.0f && x <= 1240.0f) {
+                    mSelectedMode = 1;
+                }
+            } else if (y >= 690.0f && y <= 815.0f) {
+                mFocusRow = ROW_ACTIONS;
+                if (x >= 285.0f && x < 630.0f) {
+                    mSelectedAction = ACTION_LAUNCH;
+                    action = ACTION_LAUNCH;
+                } else if (x >= 630.0f && x < 970.0f) {
+                    mSelectedAction = ACTION_IMPORT;
+                    action = ACTION_IMPORT;
+                } else if (x >= 970.0f && x <= 1315.0f) {
+                    mSelectedAction = ACTION_ADVANCED;
+                    action = ACTION_ADVANCED;
+                }
+            }
+        }
+        requestMenuRedraw();
+        if (action >= 0) {
+            performAction(action);
+        }
     }
 
     private void performAction(int action) {
@@ -301,55 +386,73 @@ public final class QuestVrLauncherActivity extends AppCompatActivity
             if (action == ACTION_LAUNCH && game != null) {
                 final String presentationMode = persistPresentationMode(mode);
                 updateLastPlayed(game);
-                final Intent handoff = QuestVrGameHandoffActivity.createGameLaunchIntent(this,
-                        game.romUri, game.zipUri, game.md5, game.crc, game.headerName,
-                        game.countryCode.getValue(), game.artPath, game.goodName,
-                        game.displayName, presentationMode);
-                leaveVr(() -> {
-                    QuestVrDiagnostics.info(TAG,
-                            "Starting non-XR lifecycle handoff after launcher teardown");
-                    startActivity(handoff);
-                    finish();
-                    overridePendingTransition(0, 0);
-                });
+                launchGame(game, presentationMode);
                 return;
             }
         }
         if (action == ACTION_IMPORT) {
-            leaveVr(() -> mScanLauncher.launch(new Intent(this, ScanRomsActivity.class)));
+            mScanLauncher.launch(new Intent(this, ScanRomsActivity.class));
         } else if (action == ACTION_ADVANCED) {
-            leaveVr(() -> {
-                startActivity(new Intent(this, GalleryActivity.class));
-                finish();
-                overridePendingTransition(0, 0);
-            });
+            startActivity(new Intent(this, GalleryActivity.class));
+            finish();
+            overridePendingTransition(0, 0);
         }
-    }
-
-    private void leaveVr(Runnable next) {
-        if (mTransitionPending || isFinishing()) {
-            return;
-        }
-        mTransitionPending = true;
-        mVrSurface.shutdownForTransition(() -> runOnUiThread(() -> {
-            try {
-                next.run();
-            } finally {
-                mTransitionPending = false;
-            }
-        }));
     }
 
     private String persistPresentationMode(int mode) {
         final String value = mode == 0 ? QuestVrSettings.PRESENTATION_CINEMA_SCREEN :
                 QuestVrSettings.PRESENTATION_IMMERSIVE_PROJECTION;
-        getSharedPreferences(QuestVrSettings.PREFERENCES_NAME, Context.MODE_PRIVATE).edit()
+        final boolean saved = getSharedPreferences(
+                QuestVrSettings.PREFERENCES_NAME, Context.MODE_PRIVATE).edit()
                 .putBoolean("enabled", true)
                 .putBoolean("stereo_enabled", true)
                 .putString("presentation_mode", value)
-                .apply();
+                .commit();
+        if (!saved) {
+            QuestVrDiagnostics.warn(TAG,
+                    "Unable to persist launch presentation; Intent override will still be used");
+        }
         QuestVrDiagnostics.info(TAG, "Selected launch presentation=" + value + " stereo=true");
         return value;
+    }
+
+    private void launchGame(GalleryItem game, String presentationMode) {
+        final Intent intent = new Intent(this, GameActivity.class);
+        ActivityHelper.configureQuestVrGameIntent(intent);
+        intent.putExtra(ActivityHelper.Keys.ROM_PATH, game.romUri);
+        intent.putExtra(ActivityHelper.Keys.ZIP_PATH, game.zipUri);
+        intent.putExtra(ActivityHelper.Keys.ROM_MD5, game.md5);
+        intent.putExtra(ActivityHelper.Keys.ROM_CRC, game.crc);
+        intent.putExtra(ActivityHelper.Keys.ROM_HEADER_NAME, game.headerName);
+        intent.putExtra(ActivityHelper.Keys.ROM_COUNTRY_CODE, game.countryCode.getValue());
+        intent.putExtra(ActivityHelper.Keys.ROM_ART_PATH, game.artPath);
+        intent.putExtra(ActivityHelper.Keys.ROM_GOOD_NAME, game.goodName);
+        intent.putExtra(ActivityHelper.Keys.ROM_DISPLAY_NAME, game.displayName);
+        intent.putExtra(ActivityHelper.Keys.DO_RESTART, false);
+        intent.putExtra(ActivityHelper.Keys.NETPLAY_ENABLED, false);
+        intent.putExtra(ActivityHelper.Keys.NETPLAY_SERVER, false);
+        intent.putExtra(QuestVrSettings.EXTRA_PRESENTATION_MODE, presentationMode);
+
+        mTransitionPending = true;
+        setStatus("Preparing " + game.toString());
+        QuestVrProcessResetReceiver.prepareForQuestLaunch(this, mTransitionHandler,
+                () -> startPreparedGame(intent),
+                () -> {
+                    mTransitionPending = false;
+                    setStatus("Previous game did not close — try Launch again");
+                });
+    }
+
+    private void startPreparedGame(Intent intent) {
+        if (isFinishing() || isDestroyed()) {
+            mTransitionPending = false;
+            return;
+        }
+        setStatus("Launching game");
+        QuestVrDiagnostics.info(TAG,
+                "Launching GameActivity from non-XR panel with a fresh emulation process");
+        mGameLauncher.launch(intent);
+        overridePendingTransition(0, 0);
     }
 
     private void updateLastPlayed(GalleryItem game) {
@@ -367,8 +470,8 @@ public final class QuestVrLauncherActivity extends AppCompatActivity
         synchronized (mMenuLock) {
             mLibraryLoading = true;
             mStatus = mScanning ? "Scanning library" : "Loading library";
-            ++mMenuRevision;
         }
+        requestMenuRedraw();
         final String selectedMd5;
         synchronized (mMenuLock) {
             selectedMd5 = mGames.isEmpty() ? null :
@@ -406,8 +509,8 @@ public final class QuestVrLauncherActivity extends AppCompatActivity
                         mFocusRow = ROW_ACTIONS;
                         mSelectedAction = ACTION_IMPORT;
                     }
-                    ++mMenuRevision;
                 }
+                requestMenuRedraw();
             });
         }, "VR library refresh");
         loader.setDaemon(true);
@@ -434,8 +537,8 @@ public final class QuestVrLauncherActivity extends AppCompatActivity
         synchronized (mMenuLock) {
             mScanning = true;
             mStatus = "Scanning library";
-            ++mMenuRevision;
         }
+        requestMenuRedraw();
         mScanProgress = new ProgressDialog(this, getString(R.string.scanning_title),
                 "VR library", getString(R.string.toast_pleaseWait), true);
         mScanConnection = new ServiceConnection() {
@@ -469,8 +572,8 @@ public final class QuestVrLauncherActivity extends AppCompatActivity
             mScanService = null;
             synchronized (mMenuLock) {
                 mScanning = false;
-                ++mMenuRevision;
             }
+            requestMenuRedraw();
             dismissScanProgress();
             if (mScanConnection != null) {
                 try {
@@ -504,9 +607,16 @@ public final class QuestVrLauncherActivity extends AppCompatActivity
         runOnUiThread(() -> {
             synchronized (mMenuLock) {
                 mStatus = status;
-                ++mMenuRevision;
             }
+            requestMenuRedraw();
         });
+    }
+
+    private void requestMenuRedraw() {
+        final QuestVrLauncherSurface surface = mVrSurface;
+        if (surface != null) {
+            surface.refresh();
+        }
     }
 
     void drawVrMenu(@NonNull Canvas canvas) {
@@ -558,7 +668,7 @@ public final class QuestVrLauncherActivity extends AppCompatActivity
         drawActionRow(canvas, paint, action, focus == ROW_ACTIONS, games.isEmpty(), scanning);
 
         final String hint = scanning ? "Scanning in the background • B cancels" :
-                "LEFT STICK  navigate     A / TRIGGER  select     B  back     BOTH STICKS  recenter";
+                "POINTER / LEFT STICK  navigate     A / TRIGGER  select     B  back";
         drawText(canvas, paint, hint, 800, 858, 18,
                 Color.rgb(125, 166, 190), Paint.Align.CENTER, false);
         canvas.restore();

@@ -43,6 +43,7 @@ import android.view.PointerIcon;
 import android.view.View;
 import android.view.WindowManager;
 import android.view.inputmethod.InputMethodManager;
+import android.widget.Toast;
 
 import androidx.activity.OnBackPressedCallback;
 import androidx.activity.result.ActivityResultLauncher;
@@ -1259,7 +1260,11 @@ public class GalleryActivity extends AppCompatActivity implements GameSidebarAct
         intent.putExtra( ActivityHelper.Keys.DO_RESTART, doRestart );
         intent.putExtra( ActivityHelper.Keys.NETPLAY_ENABLED, isNetplayEnabled );
         intent.putExtra( ActivityHelper.Keys.NETPLAY_SERVER, isNetplayServer );
-        mLaunchGame.launch(intent);
+        QuestVrProcessResetReceiver.prepareForQuestLaunch(this, mHandler,
+                () -> mLaunchGame.launch(intent),
+                () -> Toast.makeText(this,
+                        "Previous game is still closing. Try Run again.",
+                        Toast.LENGTH_LONG).show());
     }
 
     @Override
@@ -1278,4 +1283,3 @@ public class GalleryActivity extends AppCompatActivity implements GameSidebarAct
         mLaunchScanRoms.launch(intent);
     }
 }
-
