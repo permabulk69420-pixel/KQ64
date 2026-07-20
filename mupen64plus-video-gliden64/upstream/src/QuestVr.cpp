@@ -4,7 +4,9 @@
 #include <array>
 #include <atomic>
 #include <cmath>
+#include <cstdarg>
 #include <cstdint>
+#include <cstdio>
 #include <cstring>
 #include <unordered_map>
 #include <unordered_set>
@@ -196,6 +198,9 @@ std::unordered_map<GLuint, ResourceDimensions> s_textureDimensions;
 std::unordered_map<GLuint, ResourceDimensions> s_renderbufferDimensions;
 std::unordered_map<GLuint, FramebufferTarget> s_framebufferTargets;
 std::unordered_set<GLuint> s_packedFramebufferTextures;
+using DiagnosticSink = void (*)(const char*);
+std::atomic<DiagnosticSink> s_diagnosticSink{nullptr};
+std::atomic<bool> s_resetDrawClassDiagnosticsRequested{false};
 constexpr unsigned int DrawClassBucketCount = 4;
 std::array<std::unordered_set<std::uint64_t>, DrawClassBucketCount> s_loggedDrawClasses;
 std::array<bool, DrawClassBucketCount> s_drawClassCapLogged{};
@@ -208,6 +213,21 @@ void resetDrawClassDiagnostics()
 	for (auto& drawClasses : s_loggedDrawClasses)
 		drawClasses.clear();
 	s_drawClassCapLogged.fill(false);
+}
+
+void emitDrawClassDiagnostic(const char* format, ...)
+{
+	char message[1024];
+	va_list arguments;
+	va_start(arguments, format);
+	std::vsnprintf(message, sizeof(message), format, arguments);
+	va_end(arguments);
+
+	const DiagnosticSink sink = s_diagnosticSink.load(std::memory_order_acquire);
+	if (sink != nullptr)
+		sink(message);
+	else
+		LOG(LOG_MINIMAL, "%s", message);
 }
 
 struct TransformCache {
@@ -783,7 +803,8 @@ void logDrawClass(QuestVr::DrawScope::PrimitiveClass primitiveClass,
 				"perspective-triangles", "non-perspective-triangles",
 				"screen-space-triangles", "rectangles-lines"
 			};
-			LOG(LOG_MINIMAL, "Quest VR draw-class diagnostic cap reached bucket=%s cap=%u",
+			emitDrawClassDiagnostic(
+				"Quest VR draw-class diagnostic cap reached bucket=%s cap=%u",
 				BucketNames[bucket], cap);
 			s_drawClassCapLogged[bucket] = true;
 		}
@@ -797,7 +818,7 @@ void logDrawClass(QuestVr::DrawScope::PrimitiveClass primitiveClass,
 	const char* projectionName = !transformGeometry ? "none" : !perspective
 		? "non-perspective" : projectionContainsView
 			? "perspective-folded" : "perspective-canonical";
-	LOG(LOG_MINIMAL,
+	emitDrawClassDiagnostic(
 		"Quest VR draw class primitive=%s projection=%s program=%u uniforms=0x%02X "
 		"framebuffer=%u target=%d logical=%d viewport=%d,%d,%d,%d "
 		"scissor=%u,%d,%d,%d,%d sourcePacked=%u vertices=%u modifiedXY=%u "
@@ -1318,6 +1339,12 @@ DrawScope::DrawScope(PrimitiveClass primitiveClass, bool transformGeometry,
 	, m_targetWidth(getDrawTargetWidth())
 	, m_coordinateWidth(getDrawCoordinateWidth(m_targetWidth))
 {
+	if (s_resetDrawClassDiagnosticsRequested.exchange(false,
+		std::memory_order_acq_rel)) {
+		resetDrawClassDiagnostics();
+		emitDrawClassDiagnostic(
+			"Quest VR draw-class capture re-armed after renderer recenter");
+	}
 	m_active = m_active && m_targetWidth >= 2;
 	if (m_active) {
 		if (m_transformGeometry) {
@@ -1409,6 +1436,12 @@ void DrawScope::selectEye(unsigned int eye)
 #else
 #define QUEST_VR_EXPORT
 #endif
+
+extern "C" QUEST_VR_EXPORT void M64PQuestVrSetDiagnosticSink(
+	void (*sink)(const char*))
+{
+	s_diagnosticSink.store(sink, std::memory_order_release);
+}
 
 extern "C" QUEST_VR_EXPORT void M64PQuestVrSetEnabled(int enabled)
 {
@@ -1559,6 +1592,7 @@ extern "C" QUEST_VR_EXPORT void M64PQuestVrConfigure(int stereoEnabled, float ip
 extern "C" QUEST_VR_EXPORT void M64PQuestVrRecenter()
 {
 	s_recenterRequested.store(true, std::memory_order_release);
+	s_resetDrawClassDiagnosticsRequested.store(true, std::memory_order_release);
 }
 
 extern "C" QUEST_VR_EXPORT void M64PQuestVrGetStats(unsigned int* geometryDraws,

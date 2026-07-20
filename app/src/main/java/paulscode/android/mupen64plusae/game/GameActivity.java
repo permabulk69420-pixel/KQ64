@@ -327,6 +327,9 @@ public class GameActivity extends AppCompatActivity implements PromptConfirmList
         mRomArtPath = extras.getString( ActivityHelper.Keys.ROM_ART_PATH );
         mRomGoodName = extras.getString( ActivityHelper.Keys.ROM_GOOD_NAME );
         mRomDisplayName = extras.getString( ActivityHelper.Keys.ROM_DISPLAY_NAME );
+        QuestVrDiagnostics.info(TAG, "ROM identity displayName=\"" + mRomDisplayName +
+                "\" goodName=\"" + mRomGoodName + "\" headerName=\"" + mRomHeaderName +
+                "\" countryCode=" + (mRomCountryCode & 0xFF));
         mDoRestart = extras.getBoolean( ActivityHelper.Keys.DO_RESTART, false );
         mIsNetplayEnabled = extras.getBoolean( ActivityHelper.Keys.NETPLAY_ENABLED, false );
         mIsNetplayServer = extras.getBoolean( ActivityHelper.Keys.NETPLAY_SERVER, false );

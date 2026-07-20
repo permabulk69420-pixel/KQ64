@@ -84,6 +84,8 @@ using ConfigureVrFn = void (*)(int stereoEnabled, float ipdMeters, float worldUn
                                int useOpenXrFov, int marioKartProfileEnabled,
                                float marioKartCameraOffsetY, float marioKartCameraOffsetZ);
 using RecenterVrFn = void (*)();
+using RendererDiagnosticSinkFn = void (*)(const char* message);
+using SetVrDiagnosticSinkFn = void (*)(RendererDiagnosticSinkFn sink);
 using GetVrStatsFn = void (*)(uint32_t* geometryDraws, uint32_t* rectangleDraws,
                               uint32_t* eyeDraws, uint32_t* poseGeneration,
                               uint32_t* targetWidthFallbacks, uint32_t* lastTargetWidth,
@@ -211,6 +213,7 @@ struct State {
     SetVrViewsFn setVrViews{nullptr};
     ConfigureVrFn configureVr{nullptr};
     RecenterVrFn recenterVr{nullptr};
+    SetVrDiagnosticSinkFn setVrDiagnosticSink{nullptr};
     GetVrStatsFn getVrStats{nullptr};
     GetVrPipelineStatsFn getVrPipelineStats{nullptr};
     GetVrUiStatsFn getVrUiStats{nullptr};
@@ -743,6 +746,12 @@ void main() {
     return true;
 }
 
+void persistRendererDiagnostic(const char* message) {
+    if (message != nullptr && message[0] != '\0') {
+        LOGI("%s", message);
+    }
+}
+
 void resolveRendererBridge() {
     if (g.setVrEnabled != nullptr && g.setVrPose != nullptr) {
         return;
@@ -755,6 +764,8 @@ void resolveRendererBridge() {
     g.setVrViews = reinterpret_cast<SetVrViewsFn>(dlsym(symbolScope, "M64PQuestVrSetViews"));
     g.configureVr = reinterpret_cast<ConfigureVrFn>(dlsym(symbolScope, "M64PQuestVrConfigure"));
     g.recenterVr = reinterpret_cast<RecenterVrFn>(dlsym(symbolScope, "M64PQuestVrRecenter"));
+    g.setVrDiagnosticSink = reinterpret_cast<SetVrDiagnosticSinkFn>(
+        dlsym(symbolScope, "M64PQuestVrSetDiagnosticSink"));
     g.getVrStats = reinterpret_cast<GetVrStatsFn>(dlsym(symbolScope, "M64PQuestVrGetStats"));
     g.getVrPipelineStats = reinterpret_cast<GetVrPipelineStatsFn>(
         dlsym(symbolScope, "M64PQuestVrGetPipelineStats"));
@@ -770,6 +781,9 @@ void resolveRendererBridge() {
         // function pointers dangling.
         g.rendererLibraryHandle = videoPlugin;
         videoPlugin = nullptr;
+        if (g.setVrDiagnosticSink != nullptr) {
+            g.setVrDiagnosticSink(&persistRendererDiagnostic);
+        }
         if (g.configureVr != nullptr) {
             g.configureVr(g.configurationStereoEnabled ? 1 : 0, g.configurationIpdMeters,
                           g.configurationWorldUnitsPerMeter, g.configurationRotationStrength,
@@ -1663,6 +1677,9 @@ void destroyState(JNIEnv* env) {
          QuestVrDiagnostics::currentThreadId(), g.initialized ? 1 : 0,
          reinterpret_cast<void*>(g.session), sessionStateName(g.sessionState),
          g.sessionRunning ? 1 : 0);
+    if (g.setVrDiagnosticSink != nullptr) {
+        g.setVrDiagnosticSink(nullptr);
+    }
     if (g.setVrEnabled != nullptr) {
         g.setVrEnabled(0);
     }
