@@ -79,7 +79,7 @@ public final class QuestVrSettings {
     public static Configuration load(Context context) {
         SharedPreferences preferences = context.getSharedPreferences(PREFERENCES_NAME, Context.MODE_PRIVATE);
         Map<String, ?> values = preferences.getAll();
-        final boolean enabled = preferences.getBoolean("enabled", true);
+        final boolean preferenceEnabled = preferences.getBoolean("enabled", true);
         final float requestedScreenDistance = getFloat(values, "screen_distance_meters",
                 getFloat(values, "hud_depth_meters", 2.0f));
         final float screenDistance = clampFinite(requestedScreenDistance,
@@ -105,6 +105,12 @@ public final class QuestVrSettings {
         final boolean launchPresentationValid =
                 PRESENTATION_CINEMA_SCREEN.equals(launchPresentation) ||
                 PRESENTATION_IMMERSIVE_PROJECTION.equals(launchPresentation);
+        // A valid game-launch mode is an explicit request to start the Quest VR path. Treat it as
+        // authoritative for this process launch so stale cross-process SharedPreferences cannot
+        // disable VR or stereo between the launcher and GameActivity.
+        final boolean enabled = launchPresentationValid || preferenceEnabled;
+        final boolean stereoEnabled = launchPresentationValid ||
+                preferences.getBoolean("stereo_enabled", true);
         final String requestedPresentation = launchPresentationValid
                 ? launchPresentation : preferencePresentation;
         final int presentationMode = PRESENTATION_CINEMA_SCREEN.equals(requestedPresentation)
@@ -130,7 +136,9 @@ public final class QuestVrSettings {
                 SAFE_MAX_SOURCE_WIDTH);
         QuestVrDiagnostics.info("QuestVrSettings", "Loaded preferences name=" +
                 PREFERENCES_NAME + " containsEnabled=" + preferences.contains("enabled") +
-                " rawEnabled=" + values.get("enabled") + " vrEnabled=" + enabled +
+                " rawEnabled=" + values.get("enabled") +
+                " preferenceEnabled=" + preferenceEnabled + " vrEnabled=" + enabled +
+                " stereoEnabled=" + stereoEnabled +
                 " entryCount=" + values.size() +
                 " screenDistance=" + requestedScreenDistance + "->" + screenDistance +
                 " screenScale=" + requestedScreenScale + "->" + screenScale +
@@ -151,7 +159,7 @@ public final class QuestVrSettings {
                 presentationMode,
                 presentationName,
                 immersiveScale,
-                launchPresentationValid || preferences.getBoolean("stereo_enabled", true),
+                stereoEnabled,
                 preferences.getBoolean("swap_eyes", false),
                 getFloat(values, "ipd_meters", 0.064f),
                 getFloat(values, "world_units_per_meter", 64.0f),
