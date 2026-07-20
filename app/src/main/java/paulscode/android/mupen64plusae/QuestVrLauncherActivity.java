@@ -29,6 +29,7 @@ import androidx.annotation.NonNull;
 import androidx.appcompat.app.AppCompatActivity;
 
 import java.io.File;
+import java.lang.ref.WeakReference;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Date;
@@ -55,6 +56,8 @@ import paulscode.android.mupen64plusae.task.GalleryRefreshTask;
 public final class QuestVrLauncherActivity extends AppCompatActivity
         implements CacheRomInfoService.CacheRomInfoListener {
     private static final String TAG = "QuestVrLauncher";
+    private static WeakReference<QuestVrLauncherActivity> sActiveInstance =
+            new WeakReference<>(null);
     private static final int ROW_LIBRARY = 0;
     private static final int ROW_MODE = 1;
     private static final int ROW_ACTIONS = 2;
@@ -103,6 +106,7 @@ public final class QuestVrLauncherActivity extends AppCompatActivity
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        sActiveInstance = new WeakReference<>(this);
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON |
                 WindowManager.LayoutParams.FLAG_FULLSCREEN);
         getWindow().getDecorView().setSystemUiVisibility(
@@ -139,6 +143,15 @@ public final class QuestVrLauncherActivity extends AppCompatActivity
         }
         dismissScanProgress();
         super.onDestroy();
+        if (sActiveInstance.get() == this) {
+            sActiveInstance.clear();
+        }
+        QuestVrGameHandoffActivity.onLauncherDestroyed();
+    }
+
+    static boolean isLifecycleOwnerAlive() {
+        final QuestVrLauncherActivity activity = sActiveInstance.get();
+        return activity != null && !activity.isDestroyed();
     }
 
     @Override
@@ -288,16 +301,28 @@ public final class QuestVrLauncherActivity extends AppCompatActivity
             if (action == ACTION_LAUNCH && game != null) {
                 final String presentationMode = persistPresentationMode(mode);
                 updateLastPlayed(game);
-                leaveVr(() -> ActivityHelper.startGameActivity(this, game.romUri, game.zipUri,
-                        game.md5, game.crc, game.headerName, game.countryCode.getValue(),
-                        game.artPath, game.goodName, game.displayName, false, presentationMode));
+                final Intent handoff = QuestVrGameHandoffActivity.createGameLaunchIntent(this,
+                        game.romUri, game.zipUri, game.md5, game.crc, game.headerName,
+                        game.countryCode.getValue(), game.artPath, game.goodName,
+                        game.displayName, presentationMode);
+                leaveVr(() -> {
+                    QuestVrDiagnostics.info(TAG,
+                            "Starting non-XR lifecycle handoff after launcher teardown");
+                    startActivity(handoff);
+                    finish();
+                    overridePendingTransition(0, 0);
+                });
                 return;
             }
         }
         if (action == ACTION_IMPORT) {
             leaveVr(() -> mScanLauncher.launch(new Intent(this, ScanRomsActivity.class)));
         } else if (action == ACTION_ADVANCED) {
-            leaveVr(() -> startActivity(new Intent(this, GalleryActivity.class)));
+            leaveVr(() -> {
+                startActivity(new Intent(this, GalleryActivity.class));
+                finish();
+                overridePendingTransition(0, 0);
+            });
         }
     }
 

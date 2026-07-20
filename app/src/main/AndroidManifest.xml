@@ -370,6 +370,17 @@
             </intent-filter>
         </activity>
         <activity
+            android:name="paulscode.android.mupen64plusae.QuestVrGameHandoffActivity"
+            android:configChanges="screenSize|screenLayout|orientation|keyboardHidden|keyboard|navigation|uiMode|density"
+            android:excludeFromRecents="true"
+            android:exported="false"
+            android:label="@string/app_name"
+            android:launchMode="singleTop"
+            android:resizeableActivity="false"
+            android:screenOrientation="landscape"
+            android:theme="@style/Theme.Mupen64plusaeTheme.Game"
+            tools:ignore="NonResizeableActivity" />
+        <activity
             android:name="paulscode.android.mupen64plusae.QuestVrLauncherActivity"
             android:configChanges="screenSize|screenLayout|orientation|keyboardHidden|keyboard|navigation|uiMode|density"
             android:excludeFromRecents="false"
@@ -473,3 +484,4 @@
     </application>
 
 </manifest>
+

@@ -1041,7 +1041,9 @@ public class GalleryActivity extends AppCompatActivity implements GameSidebarAct
         mDrawerLayout.openDrawer(GravityCompat.START);
 
         mGameSidebar.requestFocus();
-        mGameSidebar.setSelection(0);
+        // Position zero is the disabled cover-art header. Select the first actual menu group so
+        // Quest/Android-TV controller confirmation activates Resume instead of the inert header.
+        mGameSidebar.setSelectedGroup(0);
     }
 
     public boolean onGalleryItemLongClick( GalleryItem item )
@@ -1276,3 +1278,4 @@ public class GalleryActivity extends AppCompatActivity implements GameSidebarAct
         mLaunchScanRoms.launch(intent);
     }
 }
+
