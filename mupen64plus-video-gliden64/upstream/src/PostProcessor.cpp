@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <assert.h>
 
 #include "N64.h"
@@ -140,9 +141,13 @@ FrameBuffer * PostProcessor::_doPostProcessing(FrameBuffer * _pBuffer, graphics:
 	copyParams.srcHeight = m_pTextureOriginal->height;
 	copyParams.dstX0 = 0;
 	copyParams.dstY0 = 0;
-	copyParams.dstX1 = pDstTex->width;
+	const u32 destinationCoordinateWidth =
+		QuestVr::isPackedFramebufferTexture(static_cast<u32>(pDstTex->name))
+			? std::max(1U, static_cast<u32>(pDstTex->width) / 2U)
+			: static_cast<u32>(pDstTex->width);
+	copyParams.dstX1 = destinationCoordinateWidth;
 	copyParams.dstY1 = pDstTex->height;
-	copyParams.dstWidth = pDstTex->width;
+	copyParams.dstWidth = destinationCoordinateWidth;
 	copyParams.dstHeight = pDstTex->height;
 	copyParams.tex[0] = m_pTextureOriginal;
 	copyParams.filter = textureParameters::FILTER_NEAREST;
