@@ -12,6 +12,7 @@ import android.graphics.Canvas;
 import android.graphics.Color;
 import android.graphics.LinearGradient;
 import android.graphics.Paint;
+import android.graphics.Path;
 import android.graphics.RadialGradient;
 import android.graphics.RectF;
 import android.graphics.Shader;
@@ -563,7 +564,9 @@ public final class QuestVrLauncherActivity extends AppCompatActivity
         final Bitmap artwork = getArtwork(selected);
         if (artwork != null) {
             canvas.save();
-            canvas.clipRoundRect(artRect, 22, 22);
+            final Path artworkClip = new Path();
+            artworkClip.addRoundRect(artRect, 22, 22, Path.Direction.CW);
+            canvas.clipPath(artworkClip);
             final float scale = Math.max(artRect.width() / artwork.getWidth(),
                     artRect.height() / artwork.getHeight());
             final float width = artwork.getWidth() * scale;
