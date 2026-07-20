@@ -131,7 +131,7 @@ public class SplashActivity extends AppCompatActivity implements ExtractAssetsLi
         setIntent( intent );
 
         // Assets already extracted, just launch gallery activity, passing ROM path if it was provided externally
-        ActivityHelper.startGalleryActivity( SplashActivity.this, getIntent() );
+        ActivityHelper.startMainActivity( SplashActivity.this, getIntent() );
 
         // We never want to come back to this activity, so finish it
         finish();
@@ -383,7 +383,7 @@ public class SplashActivity extends AppCompatActivity implements ExtractAssetsLi
         else
         {
             // Assets already extracted, just launch gallery activity, passing ROM path if it was provided externally
-            ActivityHelper.startGalleryActivity( SplashActivity.this, getIntent() );
+            ActivityHelper.startMainActivity( SplashActivity.this, getIntent() );
 
             // We never want to come back to this activity, so finish it
             finish();
@@ -452,7 +452,7 @@ public class SplashActivity extends AppCompatActivity implements ExtractAssetsLi
             long delay = failures.size() != 0 ? 5000 : 0;
             handler.postDelayed(() -> {
                 // Launch gallery activity, passing ROM path if it was provided externally
-                ActivityHelper.startGalleryActivity( SplashActivity.this, getIntent() );
+                ActivityHelper.startMainActivity( SplashActivity.this, getIntent() );
                 SplashActivity.this.finish();
             }, delay);
         });

@@ -9,7 +9,7 @@
             android:summary="@string/questVrEnabled_summary"
             android:title="@string/questVrEnabled_title" />
         <androidx.preference.ListPreference
-            android:defaultValue="immersive_projection"
+            android:defaultValue="cinema_screen"
             android:entries="@array/questVrPresentation_entries"
             android:entryValues="@array/questVrPresentation_values"
             android:key="presentation_mode"

@@ -51,6 +51,7 @@ import paulscode.android.mupen64plusae.persistent.TouchscreenPrefsActivity;
 import paulscode.android.mupen64plusae.profile.ManageControllerProfilesActivity;
 import paulscode.android.mupen64plusae.profile.ManageEmulationProfilesActivity;
 import paulscode.android.mupen64plusae.profile.ManageTouchscreenProfilesActivity;
+import paulscode.android.mupen64plusae.questvr.QuestVrBridge;
 import paulscode.android.mupen64plusae.task.CacheRomInfoService;
 import paulscode.android.mupen64plusae.task.CopyFromSdService;
 import paulscode.android.mupen64plusae.task.CopyToSdService;
@@ -68,6 +69,8 @@ public class ActivityHelper
 {
     public static final String ACTION_QUEST_VR_GAME =
             "paulscode.android.mupen64plusae.action.QUEST_VR_GAME";
+    public static final String ACTION_QUEST_VR_LAUNCHER =
+            "paulscode.android.mupen64plusae.action.QUEST_VR_LAUNCHER";
     public static final String CATEGORY_IMMERSIVE_HMD =
             "org.khronos.openxr.intent.category.IMMERSIVE_HMD";
 
@@ -185,6 +188,23 @@ public class ActivityHelper
         context.startActivity( new Intent( context, SplashActivity.class ) );
     }
     
+    static void startMainActivity(Context context, Intent data)
+    {
+        final String requestedRom = data == null ? null : data.getStringExtra(Keys.ROM_PATH);
+        final boolean externalRom = data != null &&
+                (data.getData() != null || (requestedRom != null && !requestedRom.isEmpty()));
+        if (!externalRom && QuestVrBridge.shouldLaunchVrLauncher(context))
+        {
+            Intent intent = new Intent(context, QuestVrLauncherActivity.class);
+            intent.setAction(ACTION_QUEST_VR_LAUNCHER);
+            intent.addCategory(Intent.CATEGORY_DEFAULT);
+            intent.addCategory(CATEGORY_IMMERSIVE_HMD);
+            context.startActivity(intent);
+            return;
+        }
+        startGalleryActivity(context, data);
+    }
+
     static void startGalleryActivity( Context context, Intent data )
     {
         if (data.getData() != null)

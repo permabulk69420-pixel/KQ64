@@ -226,6 +226,7 @@ struct State {
 
     ControllerActions controllerActions;
     bool recenterChordDown{false};
+    uint32_t menuInputMask{0};
 
     bool configurationStereoEnabled{true};
     bool configurationSwapEyes{false};
@@ -982,11 +983,11 @@ XrVector2f applyStickDeadzone(XrVector2f stick) {
 
 void syncControllerInput() {
     resolveInputBridge();
-    if (g.setVrInput == nullptr) {
-        return;
-    }
     if (!g.touchControllerEnabled || g.controllerActions.actionSet == XR_NULL_HANDLE) {
-        g.setVrInput(0, 0, 0.0f, 0.0f);
+        g.menuInputMask = 0;
+        if (g.setVrInput != nullptr) {
+            g.setVrInput(0, 0, 0.0f, 0.0f);
+        }
         return;
     }
 
@@ -995,9 +996,42 @@ void syncControllerInput() {
     syncInfo.countActiveActionSets = 1;
     syncInfo.activeActionSets = &activeSet;
     if (XR_FAILED(xrSyncActions(g.session, &syncInfo))) {
-        g.setVrInput(0, 0, 0.0f, 0.0f);
+        g.menuInputMask = 0;
+        if (g.setVrInput != nullptr) {
+            g.setVrInput(0, 0, 0.0f, 0.0f);
+        }
         return;
     }
+
+    const bool aPressed = readBooleanAction(g.controllerActions.buttonA);
+    const bool bPressed = readBooleanAction(g.controllerActions.buttonB);
+    const bool xPressed = readBooleanAction(g.controllerActions.buttonX);
+    const bool yPressed = readBooleanAction(g.controllerActions.buttonY);
+    const float leftTriggerValue = readFloatAction(g.controllerActions.leftTrigger);
+    const float rightTriggerValue = readFloatAction(g.controllerActions.rightTrigger);
+    const float leftSqueezeValue = readFloatAction(g.controllerActions.leftSqueeze);
+    const float rightSqueezeValue = readFloatAction(g.controllerActions.rightSqueeze);
+    const XrVector2f leftStick =
+            applyStickDeadzone(readVectorAction(g.controllerActions.leftStick));
+    const XrVector2f rightStick =
+            applyStickDeadzone(readVectorAction(g.controllerActions.rightStick));
+
+    constexpr uint32_t menuUp = 1u << 0;
+    constexpr uint32_t menuDown = 1u << 1;
+    constexpr uint32_t menuLeft = 1u << 2;
+    constexpr uint32_t menuRight = 1u << 3;
+    constexpr uint32_t menuSelect = 1u << 4;
+    constexpr uint32_t menuBack = 1u << 5;
+    uint32_t menuInput = 0;
+    if (leftStick.y > 0.45f || rightStick.y > 0.45f) menuInput |= menuUp;
+    if (leftStick.y < -0.45f || rightStick.y < -0.45f) menuInput |= menuDown;
+    if (leftStick.x < -0.45f || rightStick.x < -0.45f) menuInput |= menuLeft;
+    if (leftStick.x > 0.45f || rightStick.x > 0.45f) menuInput |= menuRight;
+    if (aPressed || leftTriggerValue > 0.45f || rightTriggerValue > 0.45f) {
+        menuInput |= menuSelect;
+    }
+    if (bPressed) menuInput |= menuBack;
+    g.menuInputMask = menuInput;
 
     // N64 button bits match mupen64plus-input-android's BUTTON_BITS table.
     constexpr uint32_t dpadLeft = 0x0002;
@@ -1014,16 +1048,14 @@ void syncControllerInput() {
     constexpr uint32_t lTrigger = 0x2000;
 
     uint32_t buttons = 0;
-    if (readBooleanAction(g.controllerActions.buttonA)) buttons |= aButton;
-    if (readBooleanAction(g.controllerActions.buttonB)) buttons |= bButton;
-    if (readBooleanAction(g.controllerActions.buttonX)) buttons |= dpadLeft;
-    if (readBooleanAction(g.controllerActions.buttonY)) buttons |= dpadUp;
-    if (readFloatAction(g.controllerActions.leftTrigger) > 0.45f ||
-        readFloatAction(g.controllerActions.rightTrigger) > 0.45f) buttons |= zTrigger;
-    if (readFloatAction(g.controllerActions.leftSqueeze) > 0.45f) buttons |= lTrigger;
-    if (readFloatAction(g.controllerActions.rightSqueeze) > 0.45f) buttons |= rTrigger;
+    if (aPressed) buttons |= aButton;
+    if (bPressed) buttons |= bButton;
+    if (xPressed) buttons |= dpadLeft;
+    if (yPressed) buttons |= dpadUp;
+    if (leftTriggerValue > 0.45f || rightTriggerValue > 0.45f) buttons |= zTrigger;
+    if (leftSqueezeValue > 0.45f) buttons |= lTrigger;
+    if (rightSqueezeValue > 0.45f) buttons |= rTrigger;
 
-    const XrVector2f rightStick = applyStickDeadzone(readVectorAction(g.controllerActions.rightStick));
     if (rightStick.x > 0.45f) buttons |= cRight;
     if (rightStick.x < -0.45f) buttons |= cLeft;
     if (rightStick.y > 0.45f) buttons |= cUp;
@@ -1044,8 +1076,9 @@ void syncControllerInput() {
     }
     g.recenterChordDown = recenterChord;
 
-    const XrVector2f leftStick = applyStickDeadzone(readVectorAction(g.controllerActions.leftStick));
-    g.setVrInput(1, buttons, leftStick.x, leftStick.y);
+    if (g.setVrInput != nullptr) {
+        g.setVrInput(1, buttons, leftStick.x, leftStick.y);
+    }
 }
 
 void rememberPublishedViews(XrTime displayTime, uint32_t viewCount) {
@@ -2669,6 +2702,12 @@ Java_paulscode_android_mupen64plusae_questvr_QuestVrBridge_nativeRenderFrame(
         g.maximumWorkMilliseconds = 0.0;
     }
     return JNI_TRUE;
+}
+
+extern "C" JNIEXPORT jint JNICALL
+Java_paulscode_android_mupen64plusae_questvr_QuestVrBridge_nativeGetMenuInputState(
+        JNIEnv*, jclass) {
+    return static_cast<jint>(g.menuInputMask);
 }
 
 extern "C" JNIEXPORT jboolean JNICALL

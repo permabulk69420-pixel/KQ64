@@ -3,11 +3,13 @@ package paulscode.android.mupen64plusae.questvr;
 import android.app.Activity;
 import android.content.Context;
 import android.graphics.Bitmap;
+import android.os.Build;
 import android.os.SystemClock;
 import android.view.View;
 
 import java.io.File;
 import java.nio.ByteBuffer;
+import java.util.Locale;
 
 /**
  * Thin Java owner for the optional OpenXR presentation path.
@@ -24,6 +26,13 @@ public final class QuestVrBridge {
     private static boolean sSourceTextureLogged;
     private static int sSourceWidth;
     private static int sSourceHeight;
+
+    public static final int MENU_INPUT_UP = 1 << 0;
+    public static final int MENU_INPUT_DOWN = 1 << 1;
+    public static final int MENU_INPUT_LEFT = 1 << 2;
+    public static final int MENU_INPUT_RIGHT = 1 << 3;
+    public static final int MENU_INPUT_SELECT = 1 << 4;
+    public static final int MENU_INPUT_BACK = 1 << 5;
 
     static {
         try {
@@ -58,6 +67,25 @@ public final class QuestVrBridge {
      */
     public static boolean isDeviceCapable(Context context) {
         return sLibraryLoaded;
+    }
+
+    /**
+     * Keep the VR-first shell specific to headset hardware. The Quest system feature is advisory
+     * and is absent on some current firmware, so the manufacturer/model check covers that known
+     * runtime while ordinary Android devices continue directly to the flat gallery.
+     */
+    public static boolean shouldLaunchVrLauncher(Context context) {
+        if (!sLibraryLoaded || !context.getSharedPreferences(
+                QuestVrSettings.PREFERENCES_NAME, Context.MODE_PRIVATE)
+                .getBoolean("vr_launcher_enabled", true)) {
+            return false;
+        }
+        final String manufacturer = Build.MANUFACTURER == null ? "" : Build.MANUFACTURER;
+        final String model = Build.MODEL == null ? "" : Build.MODEL;
+        return hasHeadTrackingFeature(context) ||
+                "oculus".equals(manufacturer.toLowerCase(Locale.US)) ||
+                "meta".equals(manufacturer.toLowerCase(Locale.US)) ||
+                model.toLowerCase(Locale.US).contains("quest");
     }
 
     /**
@@ -241,6 +269,11 @@ public final class QuestVrBridge {
         return sLibraryLoaded && nativeRenderFrame();
     }
 
+    /** Current debounced-by-the-caller Touch state for the VR launcher. */
+    public static int getMenuInputState() {
+        return sLibraryLoaded ? nativeGetMenuInputState() : 0;
+    }
+
     public static boolean isExitRequested() {
         return sLibraryLoaded && nativeIsExitRequested();
     }
@@ -287,6 +320,7 @@ public final class QuestVrBridge {
             boolean touchControllerEnabled, boolean debugLogging);
     private static native void nativeRecenter();
     private static native boolean nativeRenderFrame();
+    private static native int nativeGetMenuInputState();
     private static native boolean nativeIsExitRequested();
     private static native boolean nativeIsStereoSourceActive();
     private static native void nativeShutdown();

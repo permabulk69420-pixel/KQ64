@@ -167,6 +167,45 @@ public final class QuestVrSettings {
     }
 
     /**
+     * Stable mono configuration for the VR launcher. This is deliberately not persisted and does
+     * not replace the user's selected game mode; it only presents the Canvas library on a
+     * world-locked cinema quad.
+     */
+    public static Configuration loadLauncher(Context context) {
+        final Configuration game = load(context);
+        return new Configuration(
+                true,
+                PRESENTATION_MODE_CINEMA_SCREEN,
+                PRESENTATION_CINEMA_SCREEN,
+                1.0f,
+                false,
+                false,
+                game.ipdMeters,
+                game.worldUnitsPerMeter,
+                0.0f,
+                false,
+                game.maxTranslationMeters,
+                0.0f,
+                0.0f,
+                0.0f,
+                game.nearPlane,
+                game.farPlane,
+                2.0f,
+                1.0f,
+                "monoscopic_overlay",
+                game.cullingExpansion,
+                game.useOpenXrFov,
+                false,
+                0.0f,
+                0.0f,
+                game.stereoSourceWidthMultiplier,
+                game.maxStereoSourceWidth,
+                true,
+                game.debugLogging,
+                false);
+    }
+
+    /**
      * Resolve the actual GLideN64/SurfaceTexture producer size before the core starts.
      *
      * The selected flat render size is the desired per-eye content size. At the default 2.0
