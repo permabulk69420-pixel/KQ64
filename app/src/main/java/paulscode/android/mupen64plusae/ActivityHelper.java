@@ -52,6 +52,7 @@ import paulscode.android.mupen64plusae.profile.ManageControllerProfilesActivity;
 import paulscode.android.mupen64plusae.profile.ManageEmulationProfilesActivity;
 import paulscode.android.mupen64plusae.profile.ManageTouchscreenProfilesActivity;
 import paulscode.android.mupen64plusae.questvr.QuestVrBridge;
+import paulscode.android.mupen64plusae.questvr.QuestVrSettings;
 import paulscode.android.mupen64plusae.task.CacheRomInfoService;
 import paulscode.android.mupen64plusae.task.CopyFromSdService;
 import paulscode.android.mupen64plusae.task.CopyToSdService;
@@ -226,6 +227,14 @@ public class ActivityHelper
          String romHeaderName, byte romCountryCode, String romArtPath, String romGoodName, String romDisplayName,
          boolean doRestart)
     {
+        startGameActivity(context, romPath, zipPath, romMd5, romCrc, romHeaderName,
+                romCountryCode, romArtPath, romGoodName, romDisplayName, doRestart, null);
+    }
+
+    public static void startGameActivity( Context context, String romPath, String zipPath, String romMd5, String romCrc,
+         String romHeaderName, byte romCountryCode, String romArtPath, String romGoodName, String romDisplayName,
+         boolean doRestart, String questVrPresentationMode)
+    {
         Intent intent = new Intent( context, GameActivity.class );
         configureQuestVrGameIntent(intent);
         intent.putExtra( Keys.ROM_PATH, romPath );
@@ -238,6 +247,9 @@ public class ActivityHelper
         intent.putExtra( Keys.ROM_GOOD_NAME, romGoodName );
         intent.putExtra( Keys.ROM_DISPLAY_NAME, romDisplayName );
         intent.putExtra( Keys.DO_RESTART, doRestart );
+        if (questVrPresentationMode != null) {
+            intent.putExtra(QuestVrSettings.EXTRA_PRESENTATION_MODE, questVrPresentationMode);
+        }
         intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
         intent.putExtra( Keys.NETPLAY_ENABLED, false );
         intent.putExtra( Keys.NETPLAY_SERVER, false );

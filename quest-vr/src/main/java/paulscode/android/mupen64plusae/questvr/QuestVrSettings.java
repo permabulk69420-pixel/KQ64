@@ -1,5 +1,6 @@
 package paulscode.android.mupen64plusae.questvr;
 
+import android.app.Activity;
 import android.content.Context;
 import android.content.SharedPreferences;
 
@@ -13,6 +14,8 @@ public final class QuestVrSettings {
     public static final String PREFERENCES_NAME = "quest_vr";
     public static final String PRESENTATION_IMMERSIVE_PROJECTION = "immersive_projection";
     public static final String PRESENTATION_CINEMA_SCREEN = "cinema_screen";
+    public static final String EXTRA_PRESENTATION_MODE =
+            "paulscode.android.mupen64plusae.questvr.PRESENTATION_MODE";
     public static final int PRESENTATION_MODE_IMMERSIVE_PROJECTION = 0;
     public static final int PRESENTATION_MODE_CINEMA_SCREEN = 1;
     public static final int SAFE_MAX_SOURCE_WIDTH = 2688;
@@ -94,9 +97,16 @@ public final class QuestVrSettings {
                 context.getPackageName() + "_preferences", Context.MODE_PRIVATE);
         final boolean legacyAndroidImmersive = globalPreferences.getBoolean(
                 "displayImmersiveMode_v2", true);
-        final String requestedPresentation = preferences.getString("presentation_mode",
+        final String preferencePresentation = preferences.getString("presentation_mode",
                 legacyAndroidImmersive ? PRESENTATION_IMMERSIVE_PROJECTION
                         : PRESENTATION_CINEMA_SCREEN);
+        final String launchPresentation = context instanceof Activity
+                ? ((Activity) context).getIntent().getStringExtra(EXTRA_PRESENTATION_MODE) : null;
+        final boolean launchPresentationValid =
+                PRESENTATION_CINEMA_SCREEN.equals(launchPresentation) ||
+                PRESENTATION_IMMERSIVE_PROJECTION.equals(launchPresentation);
+        final String requestedPresentation = launchPresentationValid
+                ? launchPresentation : preferencePresentation;
         final int presentationMode = PRESENTATION_CINEMA_SCREEN.equals(requestedPresentation)
                 ? PRESENTATION_MODE_CINEMA_SCREEN
                 : PRESENTATION_MODE_IMMERSIVE_PROJECTION;
@@ -125,6 +135,8 @@ public final class QuestVrSettings {
                 " screenDistance=" + requestedScreenDistance + "->" + screenDistance +
                 " screenScale=" + requestedScreenScale + "->" + screenScale +
                 " presentation=" + requestedPresentation + "->" + presentationName +
+                " launchOverride=" + launchPresentationValid +
+                " preferencePresentation=" + preferencePresentation +
                 " explicitPresentation=" + preferences.contains("presentation_mode") +
                 " legacyAndroidImmersive=" + legacyAndroidImmersive +
                 " immersiveScale=" + requestedImmersiveScale + "->" + immersiveScale +
@@ -139,7 +151,7 @@ public final class QuestVrSettings {
                 presentationMode,
                 presentationName,
                 immersiveScale,
-                preferences.getBoolean("stereo_enabled", true),
+                launchPresentationValid || preferences.getBoolean("stereo_enabled", true),
                 preferences.getBoolean("swap_eyes", false),
                 getFloat(values, "ipd_meters", 0.064f),
                 getFloat(values, "world_units_per_meter", 64.0f),

@@ -2,6 +2,7 @@ package paulscode.android.mupen64plusae.questvr;
 
 import android.app.Activity;
 import android.content.Context;
+import android.content.SharedPreferences;
 import android.graphics.Bitmap;
 import android.os.Build;
 import android.os.SystemClock;
@@ -75,9 +76,10 @@ public final class QuestVrBridge {
      * runtime while ordinary Android devices continue directly to the flat gallery.
      */
     public static boolean shouldLaunchVrLauncher(Context context) {
-        if (!sLibraryLoaded || !context.getSharedPreferences(
-                QuestVrSettings.PREFERENCES_NAME, Context.MODE_PRIVATE)
-                .getBoolean("vr_launcher_enabled", true)) {
+        final SharedPreferences preferences = context.getSharedPreferences(
+                QuestVrSettings.PREFERENCES_NAME, Context.MODE_PRIVATE);
+        if (!sLibraryLoaded || !preferences.getBoolean("enabled", true) ||
+                !preferences.getBoolean("vr_launcher_enabled", true)) {
             return false;
         }
         final String manufacturer = Build.MANUFACTURER == null ? "" : Build.MANUFACTURER;

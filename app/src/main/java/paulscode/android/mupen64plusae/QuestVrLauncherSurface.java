@@ -29,6 +29,7 @@ final class QuestVrLauncherSurface extends SurfaceView implements SurfaceHolder.
     private static final String TAG = "QuestVrLauncherSurface";
     private static final long REPEAT_DELAY_MS = 360L;
     private static final long REPEAT_INTERVAL_MS = 130L;
+    private static final long VR_RESUME_DELAY_MS = 350L;
     private static final int REPEATABLE_INPUTS = QuestVrBridge.MENU_INPUT_UP |
             QuestVrBridge.MENU_INPUT_DOWN | QuestVrBridge.MENU_INPUT_LEFT |
             QuestVrBridge.MENU_INPUT_RIGHT;
@@ -38,6 +39,7 @@ final class QuestVrLauncherSurface extends SurfaceView implements SurfaceHolder.
     private LauncherThread mThread;
     private boolean mSurfaceAvailable;
     private boolean mDestroying;
+    private final Runnable mResumeRunnable = this::resumeVr;
 
     QuestVrLauncherSurface(QuestVrLauncherActivity activity) {
         super(activity);
@@ -51,7 +53,7 @@ final class QuestVrLauncherSurface extends SurfaceView implements SurfaceHolder.
         synchronized (mThreadLock) {
             mSurfaceAvailable = true;
         }
-        resumeVr();
+        resumeVrAfterDelay();
     }
 
     @Override
@@ -85,12 +87,18 @@ final class QuestVrLauncherSurface extends SurfaceView implements SurfaceHolder.
         }
     }
 
+    void resumeVrAfterDelay() {
+        removeCallbacks(mResumeRunnable);
+        postDelayed(mResumeRunnable, VR_RESUME_DELAY_MS);
+    }
+
     void shutdownForTransition(Runnable completion) {
         requestStop(completion);
     }
 
     void destroyAndWait() {
         mDestroying = true;
+        removeCallbacks(mResumeRunnable);
         final LauncherThread thread;
         synchronized (mThreadLock) {
             thread = mThread;

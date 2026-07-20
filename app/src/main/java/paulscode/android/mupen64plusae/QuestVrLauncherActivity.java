@@ -127,7 +127,7 @@ public final class QuestVrLauncherActivity extends AppCompatActivity
     protected void onResume() {
         super.onResume();
         if (mVrSurface != null && !mTransitionPending) {
-            mVrSurface.resumeVr();
+            mVrSurface.resumeVrAfterDelay();
         }
     }
 
@@ -285,11 +285,11 @@ public final class QuestVrLauncherActivity extends AppCompatActivity
                 }
             }
             if (action == ACTION_LAUNCH && game != null) {
-                persistPresentationMode(mode);
+                final String presentationMode = persistPresentationMode(mode);
                 updateLastPlayed(game);
                 leaveVr(() -> ActivityHelper.startGameActivity(this, game.romUri, game.zipUri,
                         game.md5, game.crc, game.headerName, game.countryCode.getValue(),
-                        game.artPath, game.goodName, game.displayName, false));
+                        game.artPath, game.goodName, game.displayName, false, presentationMode));
                 return;
             }
         }
@@ -314,7 +314,7 @@ public final class QuestVrLauncherActivity extends AppCompatActivity
         }));
     }
 
-    private void persistPresentationMode(int mode) {
+    private String persistPresentationMode(int mode) {
         final String value = mode == 0 ? QuestVrSettings.PRESENTATION_CINEMA_SCREEN :
                 QuestVrSettings.PRESENTATION_IMMERSIVE_PROJECTION;
         getSharedPreferences(QuestVrSettings.PREFERENCES_NAME, Context.MODE_PRIVATE).edit()
@@ -323,6 +323,7 @@ public final class QuestVrLauncherActivity extends AppCompatActivity
                 .putString("presentation_mode", value)
                 .apply();
         QuestVrDiagnostics.info(TAG, "Selected launch presentation=" + value + " stereo=true");
+        return value;
     }
 
     private void updateLastPlayed(GalleryItem game) {
