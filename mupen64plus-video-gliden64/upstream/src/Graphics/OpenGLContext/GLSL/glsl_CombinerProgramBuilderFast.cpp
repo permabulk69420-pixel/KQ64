@@ -97,13 +97,15 @@ public:
 			"    gl_Position.xy = floor(gl_Position.xy * vec2(4.0)) * vec2(0.25); \n"
 			"    gl_Position.xy = gl_Position.xy * uAdjustScale + gl_Position.ww * uAdjustTrans; \n"
 			"  }															\n"
+			// Modified-XY vertices are still in GLideN64 screen coordinates here. Scale
+			// the translation-only OpenXR NDC correction into that domain; VertexShaderEnd
+			// converts it back to the intended NDC offset.
 			"  if (uQuestVrTransformEnabled != 0 &&\n"
 			"      uQuestVrScreenSpaceTransformEnabled != 0) {\n"
-			"    highp vec4 questVrPosition = gl_Position;\n"
-			"    gl_Position = vec4(dot(uQuestVrClipRow0, questVrPosition),\n"
-			"      dot(uQuestVrClipRow1, questVrPosition),\n"
-			"      dot(uQuestVrClipRow2, questVrPosition),\n"
-			"      dot(uQuestVrClipRow3, questVrPosition));\n"
+			"    highp vec2 questVrScreenOffset =\n"
+			"      vec2(uQuestVrClipRow0.w, uQuestVrClipRow1.w) *\n"
+			"      vec2(0.5 * screenSizeDims) * gl_Position.ww;\n"
+			"    gl_Position.xy += questVrScreenOffset;\n"
 			"  }\n"
 			"  if ((aModify[1]) != 0.0)										\n"
 			"    gl_Position.z *= gl_Position.w;							\n"

@@ -196,9 +196,19 @@ std::unordered_map<GLuint, ResourceDimensions> s_textureDimensions;
 std::unordered_map<GLuint, ResourceDimensions> s_renderbufferDimensions;
 std::unordered_map<GLuint, FramebufferTarget> s_framebufferTargets;
 std::unordered_set<GLuint> s_packedFramebufferTextures;
+constexpr unsigned int DrawClassBucketCount = 4;
+std::array<std::unordered_set<std::uint64_t>, DrawClassBucketCount> s_loggedDrawClasses;
+std::array<bool, DrawClassBucketCount> s_drawClassCapLogged{};
 std::array<float, 16> s_baseProjection{};
 bool s_baseProjectionValid{false};
 bool s_projectionContainsView{false};
+
+void resetDrawClassDiagnostics()
+{
+	for (auto& drawClasses : s_loggedDrawClasses)
+		drawClasses.clear();
+	s_drawClassCapLogged.fill(false);
+}
 
 struct TransformCache {
 	bool valid{false};
@@ -705,6 +715,108 @@ unsigned int getProgramUniformMask(const ProgramUniforms& uniforms)
 	return mask;
 }
 
+void logDrawClass(QuestVr::DrawScope::PrimitiveClass primitiveClass,
+	bool transformGeometry, bool correctScreenSpaceProjection,
+	bool sourceTexturePacked, int targetWidth, int coordinateWidth,
+	unsigned int vertices, unsigned int modifiedPositionVertices)
+{
+	std::array<float, 16> projection{};
+	bool projectionContainsView = false;
+	const bool perspective = transformGeometry &&
+		getWorldProjection(projection, projectionContainsView);
+
+	unsigned int bucket = 3;
+	if (primitiveClass == QuestVr::DrawScope::PrimitiveClass::Triangles) {
+		if (correctScreenSpaceProjection)
+			bucket = 2;
+		else
+			bucket = perspective ? 0 : 1;
+	}
+	const unsigned int cap = bucket == 0 ? 32U : 8U;
+
+	const auto program = s_programs.find(s_currentProgram);
+	const unsigned int uniformMask = program == s_programs.end()
+		? 0U : getProgramUniformMask(program->second);
+	const unsigned int relevantGeometryMode = gSP.geometryMode &
+		(G_ZBUFFER | G_FOG | G_LIGHTING | G_TEXTURE_GEN | G_TEXTURE_GEN_LINEAR);
+	const unsigned int modifiedClass = modifiedPositionVertices == 0 ? 0U :
+		(modifiedPositionVertices >= vertices ? 2U : 1U);
+
+	std::uint64_t key = 1469598103934665603ULL;
+	const auto mix = [&key](std::uint64_t value) {
+		key ^= value;
+		key *= 1099511628211ULL;
+	};
+	mix(static_cast<unsigned int>(primitiveClass));
+	mix(transformGeometry ? 1U : 0U);
+	mix(correctScreenSpaceProjection ? 1U : 0U);
+	mix(sourceTexturePacked ? 1U : 0U);
+	mix(s_currentProgram);
+	mix(uniformMask);
+	mix(relevantGeometryMode);
+	mix(gSP.matrix.billboard != 0 ? 1U : 0U);
+	mix(s_drawFramebuffer == 0 ? 0U : 1U);
+	mix(static_cast<unsigned int>(targetWidth));
+	mix(static_cast<unsigned int>(coordinateWidth));
+	mix(static_cast<unsigned int>(s_viewport.x));
+	mix(static_cast<unsigned int>(s_viewport.y));
+	mix(static_cast<unsigned int>(s_viewport.width));
+	mix(static_cast<unsigned int>(s_viewport.height));
+	mix(s_scissorEnabled ? 1U : 0U);
+	mix(modifiedClass);
+	if (perspective) {
+		const unsigned int signatureIndices[] = {0, 5, 8, 9, 11, 15};
+		for (unsigned int index : signatureIndices) {
+			std::uint32_t bits = 0;
+			std::memcpy(&bits, &projection[index], sizeof(bits));
+			mix(bits);
+		}
+		mix(projectionContainsView ? 1U : 0U);
+	}
+
+	auto& drawClasses = s_loggedDrawClasses[bucket];
+	if (drawClasses.count(key) != 0)
+		return;
+	if (drawClasses.size() >= cap) {
+		if (!s_drawClassCapLogged[bucket]) {
+			static const char* const BucketNames[DrawClassBucketCount] = {
+				"perspective-triangles", "non-perspective-triangles",
+				"screen-space-triangles", "rectangles-lines"
+			};
+			LOG(LOG_MINIMAL, "Quest VR draw-class diagnostic cap reached bucket=%s cap=%u",
+				BucketNames[bucket], cap);
+			s_drawClassCapLogged[bucket] = true;
+		}
+		return;
+	}
+	drawClasses.insert(key);
+
+	const char* primitiveName = primitiveClass == QuestVr::DrawScope::PrimitiveClass::Triangles
+		? "triangles" : primitiveClass == QuestVr::DrawScope::PrimitiveClass::Rectangles
+			? "rectangles" : "lines";
+	const char* projectionName = !transformGeometry ? "none" : !perspective
+		? "non-perspective" : projectionContainsView
+			? "perspective-folded" : "perspective-canonical";
+	LOG(LOG_MINIMAL,
+		"Quest VR draw class primitive=%s projection=%s program=%u uniforms=0x%02X "
+		"framebuffer=%u target=%d logical=%d viewport=%d,%d,%d,%d "
+		"scissor=%u,%d,%d,%d,%d sourcePacked=%u vertices=%u modifiedXY=%u "
+		"geometry=0x%08X z=%u fog=%u lighting=%u texgen=%u billboard=%u "
+		"projectionSig=%.4f,%.4f,%.4f,%.4f,%.4f,%.4f",
+		primitiveName, projectionName, static_cast<unsigned int>(s_currentProgram),
+		uniformMask, static_cast<unsigned int>(s_drawFramebuffer), targetWidth,
+		coordinateWidth, s_viewport.x, s_viewport.y, s_viewport.width,
+		s_viewport.height, s_scissorEnabled ? 1U : 0U, s_scissor.x, s_scissor.y,
+		s_scissor.width, s_scissor.height, sourceTexturePacked ? 1U : 0U, vertices,
+		modifiedPositionVertices, relevantGeometryMode,
+		(relevantGeometryMode & G_ZBUFFER) != 0 ? 1U : 0U,
+		(relevantGeometryMode & G_FOG) != 0 ? 1U : 0U,
+		(relevantGeometryMode & G_LIGHTING) != 0 ? 1U : 0U,
+		(relevantGeometryMode & (G_TEXTURE_GEN | G_TEXTURE_GEN_LINEAR)) != 0 ? 1U : 0U,
+		gSP.matrix.billboard != 0 ? 1U : 0U, projection[0], projection[5],
+		projection[8], projection[9], projection[11], projection[15]);
+}
+
 bool setProgramEye(unsigned int eye, bool enabled, bool transformGeometry,
 	bool correctScreenSpaceProjection, bool sourceTexturePacked)
 {
@@ -1041,6 +1153,7 @@ void setScissorEnabled(bool enabled)
 void resetGraphicsState()
 {
 	resetProjectionTracking();
+	resetDrawClassDiagnostics();
 	s_viewport = {};
 	s_scissor = {};
 	s_scissorEnabled = false;
@@ -1194,8 +1307,9 @@ int BlitScope::mapDestinationX(int value, unsigned int eye) const
 		: value;
 }
 
-DrawScope::DrawScope(bool transformGeometry, bool correctScreenSpaceProjection,
-	bool sourceTexturePacked)
+DrawScope::DrawScope(PrimitiveClass primitiveClass, bool transformGeometry,
+	bool correctScreenSpaceProjection, bool sourceTexturePacked,
+	unsigned int vertices, unsigned int modifiedPositionVertices)
 	: m_active(isStereoEnabled() && isPackedFramebuffer(s_drawFramebuffer) &&
 		s_viewport.width >= 2 && s_viewport.height > 0)
 	, m_transformGeometry(transformGeometry)
@@ -1231,6 +1345,9 @@ DrawScope::DrawScope(bool transformGeometry, bool correctScreenSpaceProjection,
 		} else {
 			s_rectangleDraws.fetch_add(1, std::memory_order_relaxed);
 		}
+		logDrawClass(primitiveClass, m_transformGeometry,
+			m_correctScreenSpaceProjection, m_sourceTexturePacked, m_targetWidth,
+			m_coordinateWidth, vertices, modifiedPositionVertices);
 	}
 }
 
@@ -1298,6 +1415,7 @@ extern "C" QUEST_VR_EXPORT void M64PQuestVrSetEnabled(int enabled)
 	s_enabled.store(enabled != 0, std::memory_order_release);
 	if (enabled != 0) {
 		QuestVr::resetProjectionTracking();
+		resetDrawClassDiagnostics();
 		s_geometryDraws.store(0, std::memory_order_relaxed);
 		s_rectangleDraws.store(0, std::memory_order_relaxed);
 		s_eyeDraws.store(0, std::memory_order_relaxed);

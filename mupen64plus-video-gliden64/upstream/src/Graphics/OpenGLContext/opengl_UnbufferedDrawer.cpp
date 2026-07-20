@@ -138,7 +138,9 @@ void UnbufferedDrawer::drawTriangles(const graphics::Context::DrawTriangleParame
 		}
 	};
 
-	QuestVr::DrawScope stereoDraw(transformGeometry, screenSpaceGeometry);
+	QuestVr::DrawScope stereoDraw(QuestVr::DrawScope::PrimitiveClass::Triangles,
+		transformGeometry, screenSpaceGeometry, false, _params.verticesCount,
+		modifiedPositionVertices);
 	for (u32 eye = 0; eye < stereoDraw.eyeCount(); ++eye) {
 		stereoDraw.selectEye(eye);
 		draw();
@@ -184,8 +186,9 @@ void UnbufferedDrawer::drawRects(const graphics::Context::DrawRectParameters & _
 	if (m_useCoverage)
 		m_cachedAttribArray->enableVertexAttribArray(triangleAttrib::barycoords, false);
 
-	QuestVr::DrawScope stereoDraw(false, _params.questVrScreenSpace,
-		_params.questVrSourceTexturePacked);
+	QuestVr::DrawScope stereoDraw(QuestVr::DrawScope::PrimitiveClass::Rectangles,
+		false, _params.questVrScreenSpace, _params.questVrSourceTexturePacked,
+		_params.verticesCount);
 	for (u32 eye = 0; eye < stereoDraw.eyeCount(); ++eye) {
 		stereoDraw.selectEye(eye);
 		glDrawArrays(GLenum(_params.mode), 0, _params.verticesCount);
@@ -228,7 +231,8 @@ void UnbufferedDrawer::drawLine(f32 _width, SPVertex * _vertices)
 	m_cachedAttribArray->enableVertexAttribArray(rectAttrib::texcoord1, false);
 
 	glLineWidth(_width);
-	QuestVr::DrawScope stereoDraw(true);
+	QuestVr::DrawScope stereoDraw(QuestVr::DrawScope::PrimitiveClass::Lines,
+		true, false, false, 2, modifiedPositionVertices);
 	for (u32 eye = 0; eye < stereoDraw.eyeCount(); ++eye) {
 		stereoDraw.selectEye(eye);
 		glDrawArrays(GL_LINES, 0, 2);

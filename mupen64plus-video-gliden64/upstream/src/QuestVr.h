@@ -85,9 +85,17 @@ private:
  */
 class DrawScope {
 public:
-	explicit DrawScope(bool transformGeometry,
+	enum class PrimitiveClass {
+		Triangles,
+		Rectangles,
+		Lines,
+	};
+
+	explicit DrawScope(PrimitiveClass primitiveClass, bool transformGeometry,
 		bool correctScreenSpaceProjection = false,
-		bool sourceTexturePacked = false);
+		bool sourceTexturePacked = false,
+		unsigned int vertices = 0,
+		unsigned int modifiedPositionVertices = 0);
 	~DrawScope();
 
 	DrawScope(const DrawScope&) = delete;
