@@ -5,6 +5,7 @@
 #include "PostProcessor.h"
 #include "FrameBuffer.h"
 #include "Config.h"
+#include "QuestVr.h"
 #include "VI.h"
 
 #include <Graphics/Context.h>
@@ -46,6 +47,11 @@ void PostProcessor::_createResultBuffer(const FrameBuffer * _pMainBuffer)
 	initParams.format = colorFormat::RGBA;
 	initParams.dataType = datatype::UNSIGNED_BYTE;
 	gfxContext.init2DTexture(initParams);
+	// Post-processing preserves the complete side-by-side framebuffer. Propagate
+	// that classification so the final presentation copy selects one eye once,
+	// rather than treating the packed result as a full-width mono texture.
+	if (QuestVr::isPackedFramebufferTexture(static_cast<u32>(pMainTexture->name)))
+		QuestVr::markPackedFramebufferTexture(static_cast<u32>(pTexture->name));
 
 	Context::TexParameters setParams;
 	setParams.handle = pTexture->name;
