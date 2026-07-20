@@ -3,7 +3,9 @@ package paulscode.android.mupen64plusae.questvr;
 import android.app.Activity;
 import android.content.Context;
 import android.content.SharedPreferences;
+import android.os.Build;
 
+import java.util.Locale;
 import java.util.Map;
 
 /**
@@ -30,8 +32,63 @@ public final class QuestVrSettings {
     private static final float MAX_IMMERSIVE_SCALE = 1.00f;
     private static final String SOURCE_WIDTH_MULTIPLIER_V2 =
             "stereo_source_width_multiplier_v2";
+    private static final String QUEST_GRAPHICS_DEFAULTS_VERSION_KEY =
+            "quest_graphics_defaults_version";
+    private static final int QUEST_GRAPHICS_DEFAULTS_VERSION = 1;
+    private static final String QUEST_RENDER_RESOLUTION = "1008";
+    private static final String QUEST_EMULATION_PROFILE = "GlideN64-Very-Accurate";
 
     private QuestVrSettings() {
+    }
+
+    private static boolean isQuestHardware(Context context) {
+        final String manufacturer = Build.MANUFACTURER == null ? "" : Build.MANUFACTURER;
+        final String model = Build.MODEL == null ? "" : Build.MODEL;
+        return context.getPackageManager().hasSystemFeature("android.hardware.vr.headtracking") ||
+                "oculus".equals(manufacturer.toLowerCase(Locale.US)) ||
+                "meta".equals(manufacturer.toLowerCase(Locale.US)) ||
+                model.toLowerCase(Locale.US).contains("quest");
+    }
+
+    /**
+     * Upgrade Quest installs once to the hardware-tested quality baseline. These are persistent
+     * defaults rather than per-launch overrides: after this version marker is stored, Advanced
+     * settings remain user-controlled and are not rewritten on every game launch.
+     */
+    private static void ensureQuestGraphicsDefaults(Context context,
+            SharedPreferences questPreferences, SharedPreferences globalPreferences) {
+        if (!isQuestHardware(context) || questPreferences.getInt(
+                QUEST_GRAPHICS_DEFAULTS_VERSION_KEY, 0) >= QUEST_GRAPHICS_DEFAULTS_VERSION) {
+            return;
+        }
+
+        final boolean globalSaved = globalPreferences.edit()
+                .putString("displayResolution", QUEST_RENDER_RESOLUTION)
+                .putString("emulationProfileDefault", QUEST_EMULATION_PROFILE)
+                .commit();
+        if (!globalSaved) {
+            QuestVrDiagnostics.warn("QuestVrSettings",
+                    "Unable to persist Quest graphics defaults; leaving upgrade unmarked");
+            return;
+        }
+
+        final boolean questSaved = questPreferences.edit()
+                .putBoolean("enabled", true)
+                .putBoolean("stereo_enabled", true)
+                .putString(SOURCE_WIDTH_MULTIPLIER_V2, "2.0")
+                .putString("max_stereo_source_width", Integer.toString(SAFE_MAX_SOURCE_WIDTH))
+                .putInt(QUEST_GRAPHICS_DEFAULTS_VERSION_KEY, QUEST_GRAPHICS_DEFAULTS_VERSION)
+                .commit();
+        if (questSaved) {
+            QuestVrDiagnostics.info("QuestVrSettings",
+                    "Applied persistent Quest graphics preset version=" +
+                            QUEST_GRAPHICS_DEFAULTS_VERSION + " resolution=" +
+                            QUEST_RENDER_RESOLUTION + " profile=" + QUEST_EMULATION_PROFILE +
+                            " stereoSource=2.0 maxWidth=" + SAFE_MAX_SOURCE_WIDTH);
+        } else {
+            QuestVrDiagnostics.warn("QuestVrSettings",
+                    "Global Quest graphics defaults saved, but VR defaults marker failed");
+        }
     }
 
     private static float getFloat(Map<String, ?> values, String key, float defaultValue) {
@@ -78,6 +135,9 @@ public final class QuestVrSettings {
 
     public static Configuration load(Context context) {
         SharedPreferences preferences = context.getSharedPreferences(PREFERENCES_NAME, Context.MODE_PRIVATE);
+        final SharedPreferences globalPreferences = context.getSharedPreferences(
+                context.getPackageName() + "_preferences", Context.MODE_PRIVATE);
+        ensureQuestGraphicsDefaults(context, preferences, globalPreferences);
         Map<String, ?> values = preferences.getAll();
         final boolean preferenceEnabled = preferences.getBoolean("enabled", true);
         final float requestedScreenDistance = getFloat(values, "screen_distance_meters",
@@ -93,8 +153,6 @@ public final class QuestVrSettings {
         // existing installs, while the new Quest-specific setting takes precedence as soon as it
         // exists. The default shared-preference filename is defined by PreferenceManager as the
         // package name plus "_preferences"; avoiding an androidx dependency keeps this module thin.
-        final SharedPreferences globalPreferences = context.getSharedPreferences(
-                context.getPackageName() + "_preferences", Context.MODE_PRIVATE);
         final boolean legacyAndroidImmersive = globalPreferences.getBoolean(
                 "displayImmersiveMode_v2", true);
         final String preferencePresentation = preferences.getString("presentation_mode",
