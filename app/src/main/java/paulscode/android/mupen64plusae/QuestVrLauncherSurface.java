@@ -30,6 +30,7 @@ final class QuestVrLauncherSurface extends SurfaceView implements SurfaceHolder.
     private static final long REPEAT_DELAY_MS = 360L;
     private static final long REPEAT_INTERVAL_MS = 130L;
     private static final long VR_RESUME_DELAY_MS = 350L;
+    private static final long VR_HANDOFF_DELAY_MS = 500L;
     private static final int REPEATABLE_INPUTS = QuestVrBridge.MENU_INPUT_UP |
             QuestVrBridge.MENU_INPUT_DOWN | QuestVrBridge.MENU_INPUT_LEFT |
             QuestVrBridge.MENU_INPUT_RIGHT;
@@ -225,6 +226,10 @@ final class QuestVrLauncherSurface extends SurfaceView implements SurfaceHolder.
                     }
                 }
                 if (completion != null) {
+                    QuestVrDiagnostics.info(TAG,
+                            "Launcher OpenXR/EGL teardown complete; waiting " +
+                                    VR_HANDOFF_DELAY_MS + "ms before the next activity");
+                    SystemClock.sleep(VR_HANDOFF_DELAY_MS);
                     completion.run();
                 } else if (initializationFailed) {
                     mActivity.onVrInitializationFailed();
