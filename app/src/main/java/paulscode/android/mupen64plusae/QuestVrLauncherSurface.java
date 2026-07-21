@@ -1,6 +1,12 @@
 package paulscode.android.mupen64plusae;
 
+import android.graphics.Bitmap;
+import android.graphics.BitmapFactory;
 import android.graphics.Canvas;
+import android.graphics.Color;
+import android.graphics.Paint;
+import android.graphics.RectF;
+import android.graphics.Typeface;
 import android.view.MotionEvent;
 import android.view.View;
 
@@ -20,12 +26,19 @@ final class QuestVrLauncherSurface extends View {
     private static final float SWIPE_THRESHOLD = 48.0f;
 
     private final QuestVrLauncherActivity mActivity;
+    private final Bitmap mKq64Logo;
+    private final Paint mBrandPaint = new Paint(Paint.ANTI_ALIAS_FLAG | Paint.FILTER_BITMAP_FLAG);
     private float mPointerDownX;
     private float mPointerDownY;
 
     QuestVrLauncherSurface(QuestVrLauncherActivity activity) {
         super(activity);
         mActivity = activity;
+        final BitmapFactory.Options logoOptions = new BitmapFactory.Options();
+        logoOptions.inSampleSize = 4;
+        logoOptions.inPreferredConfig = Bitmap.Config.ARGB_8888;
+        mKq64Logo = BitmapFactory.decodeResource(getResources(), R.drawable.kq64_logo,
+                logoOptions);
         setFocusable(true);
         setFocusableInTouchMode(true);
     }
@@ -34,6 +47,30 @@ final class QuestVrLauncherSurface extends View {
     protected void onDraw(@NonNull Canvas canvas) {
         super.onDraw(canvas);
         mActivity.drawVrMenu(canvas);
+        drawKq64Branding(canvas);
+    }
+
+    private void drawKq64Branding(Canvas canvas) {
+        final float sx = getWidth() / (float) MENU_WIDTH;
+        final float sy = getHeight() / (float) MENU_HEIGHT;
+        canvas.save();
+        canvas.scale(sx, sy);
+
+        mBrandPaint.setShader(null);
+        mBrandPaint.setStyle(Paint.Style.FILL);
+        mBrandPaint.setColor(Color.rgb(3, 13, 31));
+        canvas.drawRoundRect(new RectF(40, 16, 470, 146), 22, 22, mBrandPaint);
+
+        if (mKq64Logo != null) {
+            canvas.drawBitmap(mKq64Logo, null, new RectF(46, 20, 172, 146), mBrandPaint);
+        }
+
+        mBrandPaint.setColor(Color.rgb(54, 202, 255));
+        mBrandPaint.setTextSize(22);
+        mBrandPaint.setTextAlign(Paint.Align.LEFT);
+        mBrandPaint.setTypeface(Typeface.DEFAULT_BOLD);
+        canvas.drawText("QUEST LIBRARY", 198, 91, mBrandPaint);
+        canvas.restore();
     }
 
     @Override
