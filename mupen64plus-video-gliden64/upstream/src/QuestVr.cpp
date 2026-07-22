@@ -4,9 +4,12 @@
 #include <array>
 #include <atomic>
 #include <cmath>
+#include <cstdarg>
 #include <cstdint>
+#include <cstdio>
 #include <cstring>
 #include <unordered_map>
+#include <unordered_set>
 
 #include "Config.h"
 #include "DisplayWindow.h"
@@ -72,7 +75,9 @@ struct FramePoseState {
 struct ProgramUniforms {
 	GLint enabled{-1};
 	GLint transformEnabled{-1};
+	GLint screenSpaceTransformEnabled{-1};
 	GLint eye{-1};
+	GLint sourceTexturePacked{-1};
 	std::array<GLint, 4> rows{{-1, -1, -1, -1}};
 };
 
@@ -109,15 +114,69 @@ std::atomic<float> s_maxTranslationMeters{0.15f};
 std::atomic<float> s_cameraOffsetX{0.0f};
 std::atomic<float> s_cameraOffsetY{0.0f};
 std::atomic<float> s_cameraOffsetZ{0.0f};
-std::atomic<float> s_marioKartCameraOffsetY{-0.20f};
-std::atomic<float> s_marioKartCameraOffsetZ{-0.75f};
+std::atomic<float> s_marioKartCameraOffsetY{0.0f};
+std::atomic<float> s_marioKartCameraOffsetZ{0.0f};
 std::atomic<unsigned int> s_poseGeneration{0};
 std::atomic<unsigned int> s_configGeneration{1};
 std::atomic<unsigned int> s_geometryDraws{0};
 std::atomic<unsigned int> s_rectangleDraws{0};
 std::atomic<unsigned int> s_eyeDraws{0};
+std::atomic<unsigned int> s_perspectiveDraws{0};
+std::atomic<unsigned int> s_orthographicDraws{0};
+std::atomic<unsigned int> s_canonicalPerspectiveDraws{0};
+std::atomic<unsigned int> s_foldedPerspectiveDraws{0};
+std::atomic<unsigned int> s_projectionLoads{0};
+std::atomic<unsigned int> s_foldedProjectionMultiplies{0};
+std::atomic<unsigned int> s_missingTransformProgramDraws{0};
+std::atomic<unsigned int> s_geometryVertices{0};
+std::atomic<unsigned int> s_modifiedPositionVertices{0};
+std::atomic<unsigned int> s_framebufferBlits{0};
+std::atomic<unsigned int> s_backgroundRectangles{0};
+std::atomic<unsigned int> s_sprite2DCommands{0};
+std::atomic<unsigned int> s_screenSpaceBatches{0};
+std::atomic<unsigned int> s_screenSpaceVertices{0};
+std::array<std::atomic<unsigned int>, 2> s_screenSpaceEyeDraws{};
+std::array<std::atomic<unsigned int>, 2> s_screenSpaceCorrections{};
+std::atomic<unsigned int> s_screenSpaceMissingUniformDraws{0};
+std::atomic<unsigned int> s_lastScreenSpaceFramebuffer{0};
+std::atomic<unsigned int> s_lastScreenSpaceProgram{0};
+std::atomic<unsigned int> s_lastScreenSpaceUniformMask{0};
+std::array<std::atomic<int>, 2> s_lastScreenSpaceOffsetXMicro{};
+std::array<std::atomic<int>, 2> s_lastScreenSpaceOffsetYMicro{};
+std::atomic<unsigned int> s_texrectScratchDraws{0};
+std::atomic<unsigned int> s_texrectScratchRectangles{0};
+std::atomic<unsigned int> s_texrectScratchFramebuffer{0};
+std::atomic<unsigned int> s_texrectScratchTexture{0};
+std::atomic<unsigned int> s_texrectScratchWidth{0};
+std::atomic<unsigned int> s_texrectScratchHeight{0};
+std::atomic<unsigned int> s_finalFramebufferBlits{0};
+std::atomic<unsigned int> s_lastFinalReadFramebuffer{0};
+std::atomic<unsigned int> s_lastFinalTexture{0};
+std::atomic<unsigned int> s_lastFinalPhysicalSourceWidth{0};
+std::atomic<unsigned int> s_lastFinalLogicalSourceWidth{0};
+std::atomic<unsigned int> s_lastFinalSourceHeight{0};
+std::atomic<unsigned int> s_lastFinalPhysicalDestinationWidth{0};
+std::atomic<unsigned int> s_lastFinalLogicalDestinationWidth{0};
+std::atomic<unsigned int> s_lastFinalDestinationHeight{0};
+std::atomic<int> s_lastFinalSourceX0{0};
+std::atomic<int> s_lastFinalSourceX1{0};
+std::atomic<int> s_lastFinalDestinationX0{0};
+std::atomic<int> s_lastFinalDestinationX1{0};
+std::atomic<unsigned int> s_lastFinalFilter{0};
+std::atomic<unsigned int> s_lastFinalClassification{0};
 std::atomic<unsigned int> s_targetWidthFallbacks{0};
 std::atomic<unsigned int> s_lastTargetWidth{0};
+std::atomic<unsigned int> s_framebufferAllocations{0};
+std::atomic<unsigned int> s_lastFramebufferN64Width{0};
+std::atomic<unsigned int> s_lastFramebufferN64Height{0};
+std::atomic<unsigned int> s_lastFramebufferPhysicalWidth{0};
+std::atomic<unsigned int> s_lastFramebufferPhysicalHeight{0};
+std::atomic<unsigned int> s_lastFramebufferScaleMilli{0};
+std::atomic<unsigned int> s_lastNativeResolutionFactor{0};
+std::atomic<unsigned int> s_lastViewportWidth{0};
+std::atomic<unsigned int> s_lastViewportHeight{0};
+std::atomic<unsigned int> s_lastScissorWidth{0};
+std::atomic<unsigned int> s_lastScissorHeight{0};
 std::atomic<std::int64_t> s_poseTimestamp{0};
 std::atomic<std::int64_t> s_transformPoseTimestamp{0};
 std::atomic<std::int64_t> s_presentedPoseTimestamp{0};
@@ -138,6 +197,38 @@ std::unordered_map<GLuint, ProgramUniforms> s_programs;
 std::unordered_map<GLuint, ResourceDimensions> s_textureDimensions;
 std::unordered_map<GLuint, ResourceDimensions> s_renderbufferDimensions;
 std::unordered_map<GLuint, FramebufferTarget> s_framebufferTargets;
+std::unordered_set<GLuint> s_packedFramebufferTextures;
+using DiagnosticSink = void (*)(const char*);
+std::atomic<DiagnosticSink> s_diagnosticSink{nullptr};
+std::atomic<bool> s_resetDrawClassDiagnosticsRequested{false};
+constexpr unsigned int DrawClassBucketCount = 4;
+std::array<std::unordered_set<std::uint64_t>, DrawClassBucketCount> s_loggedDrawClasses;
+std::array<bool, DrawClassBucketCount> s_drawClassCapLogged{};
+std::array<float, 16> s_baseProjection{};
+bool s_baseProjectionValid{false};
+bool s_projectionContainsView{false};
+
+void resetDrawClassDiagnostics()
+{
+	for (auto& drawClasses : s_loggedDrawClasses)
+		drawClasses.clear();
+	s_drawClassCapLogged.fill(false);
+}
+
+void emitDrawClassDiagnostic(const char* format, ...)
+{
+	char message[1024];
+	va_list arguments;
+	va_start(arguments, format);
+	std::vsnprintf(message, sizeof(message), format, arguments);
+	va_end(arguments);
+
+	const DiagnosticSink sink = s_diagnosticSink.load(std::memory_order_acquire);
+	if (sink != nullptr)
+		sink(message);
+	else
+		LOG(LOG_MINIMAL, "%s", message);
+}
 
 struct TransformCache {
 	bool valid{false};
@@ -149,6 +240,15 @@ struct TransformCache {
 };
 
 TransformCache s_transformCache;
+
+struct ScreenSpaceTransformCache {
+	bool cached{false};
+	bool valid{false};
+	unsigned int poseGeneration{0};
+	std::array<std::array<float, 16>, 2> eyes{};
+};
+
+ScreenSpaceTransformCache s_screenSpaceTransformCache;
 
 Quaternion normalize(Quaternion q)
 {
@@ -377,6 +477,25 @@ bool isPerspectiveProjection(const float* projection)
 	return std::abs(projection[11]) >= 0.5f && std::abs(projection[15]) <= 0.001f;
 }
 
+bool getWorldProjection(std::array<float, 16>& projection, bool& containsView)
+{
+	if (s_baseProjectionValid) {
+		if (s_projectionContainsView &&
+			(config.generalEmulation.hacks & hack_MK64) != 0 &&
+			!s_marioKartProfileEnabled.load(std::memory_order_relaxed)) {
+			containsView = false;
+			return false;
+		}
+		projection = s_baseProjection;
+		containsView = s_projectionContainsView;
+		return true;
+	}
+
+	std::memcpy(projection.data(), gSP.matrix.projection, sizeof(float) * 16);
+	containsView = false;
+	return isPerspectiveProjection(projection.data());
+}
+
 void applyRuntimeProjection(unsigned int eye, const FramePoseState& framePose, float* projection)
 {
 	if (!s_useOpenXrFov.load(std::memory_order_relaxed) ||
@@ -409,7 +528,12 @@ void buildEyeTransform(unsigned int eye, const FramePoseState& framePose,
 	const Quaternion recenterOrientation = framePose.recenterOrientation;
 	const Quaternion currentOrientation = framePose.orientation;
 	Quaternion headOrientation = multiply(conjugate(recenterOrientation), currentOrientation);
-	headOrientation = scaleRotation(headOrientation, s_rotationStrength.load(std::memory_order_relaxed));
+	// This matrix is applied after the N64 camera has already produced clip coordinates. At that
+	// late boundary the OpenXR view rotation has the opposite sign from an ordinary pre-projection
+	// camera transform. Convert it here so user-facing +1 follows the headset; a negative setting
+	// remains an intentional inversion.
+	const float userRotationStrength = s_rotationStrength.load(std::memory_order_relaxed);
+	headOrientation = scaleRotation(headOrientation, -userRotationStrength);
 
 	Vector3 headPosition{0.0f, 0.0f, 0.0f};
 	if (s_positionEnabled.load(std::memory_order_relaxed)) {
@@ -457,7 +581,7 @@ void buildEyeTransform(unsigned int eye, const FramePoseState& framePose,
 	float profileOffsetZ = 0.0f;
 	if (marioKartWorldPass) {
 		if (!s_marioKartProfileLogged.exchange(true, std::memory_order_relaxed))
-			LOG(LOG_MINIMAL, "Quest VR Mario Kart 64 close-chase profile active");
+			LOG(LOG_MINIMAL, "Quest VR Mario Kart 64 race-camera recovery active");
 		profileOffsetY = s_marioKartCameraOffsetY.load(std::memory_order_relaxed);
 		profileOffsetZ = s_marioKartCameraOffsetZ.load(std::memory_order_relaxed);
 	}
@@ -502,7 +626,10 @@ const std::array<float, 16>& getEyeTransform(unsigned int eye)
 {
 	latchFramePose();
 	std::array<float, 16> projection{};
-	std::memcpy(projection.data(), gSP.matrix.projection, sizeof(float) * 16);
+	bool projectionContainsView = false;
+	if (!getWorldProjection(projection, projectionContainsView)) {
+		identity(projection.data());
+	}
 	const bool marioKartWorldPass = s_marioKartProfileEnabled.load(std::memory_order_relaxed) &&
 		(config.generalEmulation.hacks & hack_MK64) != 0 &&
 		(gSP.geometryMode & G_ZBUFFER) != 0;
@@ -524,38 +651,265 @@ const std::array<float, 16>& getEyeTransform(unsigned int eye)
 	return s_transformCache.eyes[std::min(eye, 1U)];
 }
 
-void setProgramEye(unsigned int eye, bool enabled, bool transformGeometry)
+bool buildScreenSpaceEyeTransform(unsigned int eye, const FramePoseState& framePose,
+	float* destination)
+{
+	identity(destination);
+	if (!framePose.haveRuntimeViews)
+		return false;
+
+	const RuntimeViewState& view = framePose.views[std::min(eye, 1U)];
+	const float tanLeft = std::tan(view.angleLeft);
+	const float tanRight = std::tan(view.angleRight);
+	const float tanUp = std::tan(view.angleUp);
+	const float tanDown = std::tan(view.angleDown);
+	const float width = tanRight - tanLeft;
+	const float height = tanUp - tanDown;
+	if (!std::isfinite(width) || !std::isfinite(height) ||
+		width < 0.01f || height < 0.01f)
+		return false;
+
+	const float offsetX = -(tanRight + tanLeft) / width;
+	const float offsetY = -(tanUp + tanDown) / height;
+	if (!std::isfinite(offsetX) || !std::isfinite(offsetY))
+		return false;
+
+	// Screen-space vertices currently use symmetric eye-image coordinates. OpenXR's
+	// asymmetric per-eye frusta place the forward optical axis at a different NDC
+	// location in each eye. Shift only the clip-space centre; keep HUD rotation,
+	// translation and scale head-stable.
+	destination[12] = offsetX;
+	destination[13] = offsetY;
+	return true;
+}
+
+const std::array<float, 16>* getScreenSpaceEyeTransform(unsigned int eye)
+{
+	latchFramePose();
+	const unsigned int poseGeneration = s_framePose.generation;
+	if (!s_screenSpaceTransformCache.cached ||
+		s_screenSpaceTransformCache.poseGeneration != poseGeneration) {
+		s_screenSpaceTransformCache.cached = true;
+		s_screenSpaceTransformCache.poseGeneration = poseGeneration;
+		s_screenSpaceTransformCache.valid = s_framePose.haveRuntimeViews;
+		for (unsigned int index = 0; index < 2; ++index) {
+			const bool eyeValid = buildScreenSpaceEyeTransform(index, s_framePose,
+				s_screenSpaceTransformCache.eyes[index].data());
+			s_screenSpaceTransformCache.valid =
+				s_screenSpaceTransformCache.valid && eyeValid;
+		}
+	}
+
+	if (!s_screenSpaceTransformCache.valid)
+		return nullptr;
+	return &s_screenSpaceTransformCache.eyes[std::min(eye, 1U)];
+}
+
+enum ProgramUniformBit : unsigned int {
+	ProgramUniformEnabled = 1U << 0,
+	ProgramUniformTransformEnabled = 1U << 1,
+	ProgramUniformScreenSpaceTransformEnabled = 1U << 2,
+	ProgramUniformRow0 = 1U << 3,
+	ProgramUniformRow1 = 1U << 4,
+	ProgramUniformRow2 = 1U << 5,
+	ProgramUniformRow3 = 1U << 6,
+};
+
+constexpr unsigned int RequiredScreenSpaceUniformMask =
+	ProgramUniformTransformEnabled | ProgramUniformScreenSpaceTransformEnabled |
+	ProgramUniformRow0 | ProgramUniformRow1 | ProgramUniformRow2 | ProgramUniformRow3;
+
+unsigned int getProgramUniformMask(const ProgramUniforms& uniforms)
+{
+	unsigned int mask = 0;
+	if (uniforms.enabled >= 0)
+		mask |= ProgramUniformEnabled;
+	if (uniforms.transformEnabled >= 0)
+		mask |= ProgramUniformTransformEnabled;
+	if (uniforms.screenSpaceTransformEnabled >= 0)
+		mask |= ProgramUniformScreenSpaceTransformEnabled;
+	for (unsigned int row = 0; row < uniforms.rows.size(); ++row) {
+		if (uniforms.rows[row] >= 0)
+			mask |= ProgramUniformRow0 << row;
+	}
+	return mask;
+}
+
+void logDrawClass(QuestVr::DrawScope::PrimitiveClass primitiveClass,
+	bool transformGeometry, bool correctScreenSpaceProjection,
+	bool sourceTexturePacked, int targetWidth, int coordinateWidth,
+	unsigned int vertices, unsigned int modifiedPositionVertices)
+{
+	std::array<float, 16> projection{};
+	bool projectionContainsView = false;
+	const bool perspective = transformGeometry &&
+		getWorldProjection(projection, projectionContainsView);
+
+	unsigned int bucket = 3;
+	if (primitiveClass == QuestVr::DrawScope::PrimitiveClass::Triangles) {
+		if (correctScreenSpaceProjection)
+			bucket = 2;
+		else
+			bucket = perspective ? 0 : 1;
+	}
+	const unsigned int cap = bucket == 0 ? 32U : 8U;
+
+	const auto program = s_programs.find(s_currentProgram);
+	const unsigned int uniformMask = program == s_programs.end()
+		? 0U : getProgramUniformMask(program->second);
+	const unsigned int relevantGeometryMode = gSP.geometryMode &
+		(G_ZBUFFER | G_FOG | G_LIGHTING | G_TEXTURE_GEN | G_TEXTURE_GEN_LINEAR);
+	const unsigned int modifiedClass = modifiedPositionVertices == 0 ? 0U :
+		(modifiedPositionVertices >= vertices ? 2U : 1U);
+
+	std::uint64_t key = 1469598103934665603ULL;
+	const auto mix = [&key](std::uint64_t value) {
+		key ^= value;
+		key *= 1099511628211ULL;
+	};
+	mix(static_cast<unsigned int>(primitiveClass));
+	mix(transformGeometry ? 1U : 0U);
+	mix(correctScreenSpaceProjection ? 1U : 0U);
+	mix(sourceTexturePacked ? 1U : 0U);
+	mix(s_currentProgram);
+	mix(uniformMask);
+	mix(relevantGeometryMode);
+	mix(gSP.matrix.billboard != 0 ? 1U : 0U);
+	mix(s_drawFramebuffer == 0 ? 0U : 1U);
+	mix(static_cast<unsigned int>(targetWidth));
+	mix(static_cast<unsigned int>(coordinateWidth));
+	mix(static_cast<unsigned int>(s_viewport.x));
+	mix(static_cast<unsigned int>(s_viewport.y));
+	mix(static_cast<unsigned int>(s_viewport.width));
+	mix(static_cast<unsigned int>(s_viewport.height));
+	mix(s_scissorEnabled ? 1U : 0U);
+	mix(modifiedClass);
+	if (perspective) {
+		const unsigned int signatureIndices[] = {0, 5, 8, 9, 11, 15};
+		for (unsigned int index : signatureIndices) {
+			std::uint32_t bits = 0;
+			std::memcpy(&bits, &projection[index], sizeof(bits));
+			mix(bits);
+		}
+		mix(projectionContainsView ? 1U : 0U);
+	}
+
+	auto& drawClasses = s_loggedDrawClasses[bucket];
+	if (drawClasses.count(key) != 0)
+		return;
+	if (drawClasses.size() >= cap) {
+		if (!s_drawClassCapLogged[bucket]) {
+			static const char* const BucketNames[DrawClassBucketCount] = {
+				"perspective-triangles", "non-perspective-triangles",
+				"screen-space-triangles", "rectangles-lines"
+			};
+			emitDrawClassDiagnostic(
+				"Quest VR draw-class diagnostic cap reached bucket=%s cap=%u",
+				BucketNames[bucket], cap);
+			s_drawClassCapLogged[bucket] = true;
+		}
+		return;
+	}
+	drawClasses.insert(key);
+
+	const char* primitiveName = primitiveClass == QuestVr::DrawScope::PrimitiveClass::Triangles
+		? "triangles" : primitiveClass == QuestVr::DrawScope::PrimitiveClass::Rectangles
+			? "rectangles" : "lines";
+	const char* projectionName = !transformGeometry ? "none" : !perspective
+		? "non-perspective" : projectionContainsView
+			? "perspective-folded" : "perspective-canonical";
+	emitDrawClassDiagnostic(
+		"Quest VR draw class primitive=%s projection=%s program=%u uniforms=0x%02X "
+		"framebuffer=%u target=%d logical=%d viewport=%d,%d,%d,%d "
+		"scissor=%u,%d,%d,%d,%d sourcePacked=%u vertices=%u modifiedXY=%u "
+		"geometry=0x%08X z=%u fog=%u lighting=%u texgen=%u billboard=%u "
+		"projectionSig=%.4f,%.4f,%.4f,%.4f,%.4f,%.4f",
+		primitiveName, projectionName, static_cast<unsigned int>(s_currentProgram),
+		uniformMask, static_cast<unsigned int>(s_drawFramebuffer), targetWidth,
+		coordinateWidth, s_viewport.x, s_viewport.y, s_viewport.width,
+		s_viewport.height, s_scissorEnabled ? 1U : 0U, s_scissor.x, s_scissor.y,
+		s_scissor.width, s_scissor.height, sourceTexturePacked ? 1U : 0U, vertices,
+		modifiedPositionVertices, relevantGeometryMode,
+		(relevantGeometryMode & G_ZBUFFER) != 0 ? 1U : 0U,
+		(relevantGeometryMode & G_FOG) != 0 ? 1U : 0U,
+		(relevantGeometryMode & G_LIGHTING) != 0 ? 1U : 0U,
+		(relevantGeometryMode & (G_TEXTURE_GEN | G_TEXTURE_GEN_LINEAR)) != 0 ? 1U : 0U,
+		gSP.matrix.billboard != 0 ? 1U : 0U, projection[0], projection[5],
+		projection[8], projection[9], projection[11], projection[15]);
+}
+
+bool setProgramEye(unsigned int eye, bool enabled, bool transformGeometry,
+	bool correctScreenSpaceProjection, bool sourceTexturePacked)
 {
 	const auto program = s_programs.find(s_currentProgram);
 	if (program == s_programs.end())
-		return;
+		return false;
 	const ProgramUniforms& uniforms = program->second;
 	if (!enabled) {
 		if (uniforms.enabled >= 0)
 			glUniform1i(uniforms.enabled, 0);
 		if (uniforms.transformEnabled >= 0)
 			glUniform1i(uniforms.transformEnabled, 0);
-		return;
+		if (uniforms.screenSpaceTransformEnabled >= 0)
+			glUniform1i(uniforms.screenSpaceTransformEnabled, 0);
+		if (uniforms.sourceTexturePacked >= 0)
+			glUniform1i(uniforms.sourceTexturePacked, 0);
+		return false;
 	}
 	if (uniforms.enabled >= 0)
 		glUniform1i(uniforms.enabled, 1);
 	if (uniforms.eye >= 0)
 		glUniform1i(uniforms.eye, static_cast<GLint>(eye));
+	if (uniforms.sourceTexturePacked >= 0)
+		glUniform1i(uniforms.sourceTexturePacked, sourceTexturePacked ? 1 : 0);
 
-	const bool applyTransform = transformGeometry &&
-		isPerspectiveProjection(reinterpret_cast<const float*>(gSP.matrix.projection));
+	std::array<float, 16> matrix{};
+	bool applyTransform = false;
+	if (transformGeometry) {
+		std::array<float, 16> worldProjection{};
+		bool projectionContainsView = false;
+		if (getWorldProjection(worldProjection, projectionContainsView)) {
+			matrix = getEyeTransform(eye);
+			applyTransform = true;
+		}
+	} else if (correctScreenSpaceProjection) {
+		const std::array<float, 16>* screenSpaceMatrix =
+			getScreenSpaceEyeTransform(eye);
+		if (screenSpaceMatrix != nullptr) {
+			matrix = *screenSpaceMatrix;
+			applyTransform = true;
+		}
+	}
+	const unsigned int uniformMask = getProgramUniformMask(uniforms);
+	if (correctScreenSpaceProjection &&
+		(uniformMask & RequiredScreenSpaceUniformMask) != RequiredScreenSpaceUniformMask) {
+		applyTransform = false;
+	}
+
 	if (uniforms.transformEnabled >= 0)
 		glUniform1i(uniforms.transformEnabled, applyTransform ? 1 : 0);
+	if (uniforms.screenSpaceTransformEnabled >= 0) {
+		glUniform1i(uniforms.screenSpaceTransformEnabled,
+			applyTransform && correctScreenSpaceProjection ? 1 : 0);
+	}
 	if (!applyTransform)
-		return;
+		return false;
 
-	const std::array<float, 16>& matrix = getEyeTransform(eye);
 	for (int row = 0; row < 4; ++row) {
 		if (uniforms.rows[row] >= 0) {
 			glUniform4f(uniforms.rows[row], matrix[row], matrix[4 + row],
 				matrix[8 + row], matrix[12 + row]);
 		}
 	}
+	if (correctScreenSpaceProjection) {
+		const unsigned int clampedEye = std::min(eye, 1U);
+		s_screenSpaceCorrections[clampedEye].fetch_add(1, std::memory_order_relaxed);
+		s_lastScreenSpaceOffsetXMicro[clampedEye].store(static_cast<int>(
+			std::lround(matrix[12] * 1000000.0f)), std::memory_order_relaxed);
+		s_lastScreenSpaceOffsetYMicro[clampedEye].store(static_cast<int>(
+			std::lround(matrix[13] * 1000000.0f)), std::memory_order_relaxed);
+	}
+	return true;
 }
 
 int mapCoordinate(int value, int sourceOrigin, int sourceSize, int targetOrigin, int targetSize)
@@ -584,6 +938,24 @@ int getFramebufferWidth(GLuint framebuffer)
 	return resource->second.width;
 }
 
+bool isPackedFramebuffer(GLuint framebuffer)
+{
+	if (framebuffer == 0)
+		return s_enabled.load(std::memory_order_acquire) &&
+			s_stereoEnabled.load(std::memory_order_relaxed);
+
+	const auto target = s_framebufferTargets.find(framebuffer);
+	if (target == s_framebufferTargets.end() || target->second.renderbuffer)
+		return false;
+	return s_packedFramebufferTextures.count(target->second.resource) != 0;
+}
+
+int getFramebufferCoordinateWidth(GLuint framebuffer, int physicalWidth)
+{
+	return isPackedFramebuffer(framebuffer)
+		? std::max(1, physicalWidth / 2) : physicalWidth;
+}
+
 int getDrawTargetWidth()
 {
 	int width = getFramebufferWidth(s_drawFramebuffer);
@@ -596,12 +968,22 @@ int getDrawTargetWidth()
 	return width;
 }
 
-int mapEyeCoordinate(int value, int targetWidth, unsigned int eye)
+int getDrawCoordinateWidth(int targetWidth)
 {
-	const int leftWidth = targetWidth / 2;
+	// Direct draws to the Android/default surface historically provide physical
+	// SBS viewport coordinates. GLideN64 framebuffer objects provide per-eye
+	// logical coordinates and are explicitly marked as packed.
+	if (s_drawFramebuffer == 0)
+		return targetWidth;
+	return getFramebufferCoordinateWidth(s_drawFramebuffer, targetWidth);
+}
+
+int mapEyeCoordinate(int value, int physicalWidth, int coordinateWidth, unsigned int eye)
+{
+	const int leftWidth = physicalWidth / 2;
 	const int eyeOrigin = eye == 0 ? 0 : leftWidth;
-	const int eyeWidth = eye == 0 ? leftWidth : targetWidth - leftWidth;
-	return mapCoordinate(value, 0, targetWidth, eyeOrigin, eyeWidth);
+	const int eyeWidth = eye == 0 ? leftWidth : physicalWidth - leftWidth;
+	return mapCoordinate(value, 0, coordinateWidth, eyeOrigin, eyeWidth);
 }
 
 } // namespace
@@ -614,12 +996,100 @@ bool isStereoEnabled()
 		s_stereoEnabled.load(std::memory_order_relaxed);
 }
 
+void noteProjectionMatrix(const float* matrix, bool load)
+{
+	if (matrix == nullptr)
+		return;
+
+	if (load) {
+		s_projectionLoads.fetch_add(1, std::memory_order_relaxed);
+		s_projectionContainsView = false;
+		s_baseProjectionValid = isPerspectiveProjection(matrix);
+		if (s_baseProjectionValid)
+			std::copy(matrix, matrix + 16, s_baseProjection.begin());
+	} else if (s_baseProjectionValid) {
+		// A projection-stack multiply after a canonical perspective load is commonly a
+		// view matrix in Mario Kart 64.  Keep the original perspective matrix: inverse(P)
+		// then reconstructs camera-space vertices from the already folded P*V clip value.
+		s_projectionContainsView = true;
+		s_foldedProjectionMultiplies.fetch_add(1, std::memory_order_relaxed);
+	}
+	s_transformCache.valid = false;
+}
+
+void resetProjectionTracking()
+{
+	s_baseProjectionValid = false;
+	s_projectionContainsView = false;
+	s_transformCache.valid = false;
+}
+
+unsigned int framebufferWidthMultiplier()
+{
+	return isStereoEnabled() ? 2U : 1U;
+}
+
+float framebufferScale(float windowScaleX, float windowScaleY)
+{
+	if (!isStereoEnabled()) {
+		// Preserve a usable Android fallback when a VR-sized (two-eye-wide) producer
+		// was selected but OpenXR initialization later failed.
+		if (windowScaleY > 0.0f && windowScaleX >= windowScaleY * 1.9f)
+			return std::max(std::min(windowScaleX * 0.5f, windowScaleY), 1.0f);
+		return std::max(windowScaleX, 1.0f);
+	}
+	// The Android target is one side-by-side row.  GLideN64's normal stretch aspect
+	// makes scaleX describe both eyes, while scaleY already describes one eye.
+	// Keep one scalar N64-to-eye scale and add the second eye only to physical width.
+	const float perEyeScaleX = windowScaleX * 0.5f;
+	const float safeScaleY = windowScaleY > 0.0f ? windowScaleY : perEyeScaleX;
+	return std::max(std::min(perEyeScaleX, safeScaleY), 1.0f);
+}
+
+void markPackedFramebufferTexture(unsigned int texture)
+{
+	if (texture != 0 && isStereoEnabled())
+		s_packedFramebufferTextures.insert(texture);
+}
+
+bool isPackedFramebufferTexture(unsigned int texture)
+{
+	return texture != 0 && s_packedFramebufferTextures.count(texture) != 0;
+}
+
+void noteFramebufferAllocation(unsigned int n64Width, unsigned int n64Height,
+	float scale, unsigned int physicalWidth, unsigned int physicalHeight,
+	unsigned int nativeResolutionFactor)
+{
+	if (!isStereoEnabled())
+		return;
+	s_framebufferAllocations.fetch_add(1, std::memory_order_relaxed);
+	const std::uint64_t candidatePixels = static_cast<std::uint64_t>(physicalWidth) *
+		physicalHeight;
+	const std::uint64_t recordedPixels = static_cast<std::uint64_t>(
+		s_lastFramebufferPhysicalWidth.load(std::memory_order_relaxed)) *
+		s_lastFramebufferPhysicalHeight.load(std::memory_order_relaxed);
+	if (candidatePixels < recordedPixels)
+		return;
+	s_lastFramebufferN64Width.store(n64Width, std::memory_order_relaxed);
+	s_lastFramebufferN64Height.store(n64Height, std::memory_order_relaxed);
+	s_lastFramebufferPhysicalWidth.store(physicalWidth, std::memory_order_relaxed);
+	s_lastFramebufferPhysicalHeight.store(physicalHeight, std::memory_order_relaxed);
+	s_lastFramebufferScaleMilli.store(static_cast<unsigned int>(
+		std::max(0.0f, scale) * 1000.0f + 0.5f), std::memory_order_relaxed);
+	s_lastNativeResolutionFactor.store(nativeResolutionFactor, std::memory_order_relaxed);
+}
+
 void registerProgram(unsigned int program)
 {
 	ProgramUniforms uniforms;
 	uniforms.enabled = glGetUniformLocation(program, "uQuestVrEnabled");
 	uniforms.transformEnabled = glGetUniformLocation(program, "uQuestVrTransformEnabled");
+	uniforms.screenSpaceTransformEnabled = glGetUniformLocation(program,
+		"uQuestVrScreenSpaceTransformEnabled");
 	uniforms.eye = glGetUniformLocation(program, "uQuestVrEye");
+	uniforms.sourceTexturePacked = glGetUniformLocation(program,
+		"uQuestVrSourceTexturePacked");
 	uniforms.rows[0] = glGetUniformLocation(program, "uQuestVrClipRow0");
 	uniforms.rows[1] = glGetUniformLocation(program, "uQuestVrClipRow1");
 	uniforms.rows[2] = glGetUniformLocation(program, "uQuestVrClipRow2");
@@ -648,6 +1118,7 @@ void registerTexture(unsigned int texture, int width, int height)
 void unregisterTexture(unsigned int texture)
 {
 	s_textureDimensions.erase(texture);
+	s_packedFramebufferTextures.erase(texture);
 }
 
 void registerRenderbuffer(unsigned int renderbuffer, int width, int height)
@@ -680,11 +1151,19 @@ void setFramebufferBinding(unsigned int target, unsigned int framebuffer)
 void setViewport(int x, int y, int width, int height)
 {
 	s_viewport = {x, y, width, height};
+	s_lastViewportWidth.store(static_cast<unsigned int>(std::max(0, width)),
+		std::memory_order_relaxed);
+	s_lastViewportHeight.store(static_cast<unsigned int>(std::max(0, height)),
+		std::memory_order_relaxed);
 }
 
 void setScissor(int x, int y, int width, int height)
 {
 	s_scissor = {x, y, width, height};
+	s_lastScissorWidth.store(static_cast<unsigned int>(std::max(0, width)),
+		std::memory_order_relaxed);
+	s_lastScissorHeight.store(static_cast<unsigned int>(std::max(0, height)),
+		std::memory_order_relaxed);
 }
 
 void setScissorEnabled(bool enabled)
@@ -694,6 +1173,8 @@ void setScissorEnabled(bool enabled)
 
 void resetGraphicsState()
 {
+	resetProjectionTracking();
+	resetDrawClassDiagnostics();
 	s_viewport = {};
 	s_scissor = {};
 	s_scissorEnabled = false;
@@ -702,7 +1183,9 @@ void resetGraphicsState()
 	s_textureDimensions.clear();
 	s_renderbufferDimensions.clear();
 	s_framebufferTargets.clear();
+	s_packedFramebufferTextures.clear();
 	s_transformCache.valid = false;
+	s_screenSpaceTransformCache.cached = false;
 	s_framePose.valid = false;
 	s_framePoseNeedsLatch.store(true, std::memory_order_release);
 }
@@ -721,12 +1204,109 @@ void markFramePresented()
 	s_framePoseNeedsLatch.store(true, std::memory_order_release);
 }
 
+void noteGeometryVertices(unsigned int totalVertices, unsigned int modifiedPositionVertices)
+{
+	if (!isStereoEnabled())
+		return;
+	s_geometryVertices.fetch_add(totalVertices, std::memory_order_relaxed);
+	s_modifiedPositionVertices.fetch_add(modifiedPositionVertices,
+		std::memory_order_relaxed);
+}
+
+void noteScreenSpaceBatch(unsigned int vertices)
+{
+	if (!isStereoEnabled())
+		return;
+	s_screenSpaceBatches.fetch_add(1, std::memory_order_relaxed);
+	s_screenSpaceVertices.fetch_add(vertices, std::memory_order_relaxed);
+	s_lastScreenSpaceFramebuffer.store(s_drawFramebuffer, std::memory_order_relaxed);
+	s_lastScreenSpaceProgram.store(s_currentProgram, std::memory_order_relaxed);
+	const auto program = s_programs.find(s_currentProgram);
+	const unsigned int mask = program == s_programs.end()
+		? 0U : getProgramUniformMask(program->second);
+	s_lastScreenSpaceUniformMask.store(mask, std::memory_order_relaxed);
+	if ((mask & RequiredScreenSpaceUniformMask) != RequiredScreenSpaceUniformMask) {
+		s_screenSpaceMissingUniformDraws.fetch_add(1, std::memory_order_relaxed);
+	}
+}
+
+void noteBackgroundRectangle()
+{
+	if (isStereoEnabled())
+		s_backgroundRectangles.fetch_add(1, std::memory_order_relaxed);
+}
+
+void noteSprite2D()
+{
+	if (isStereoEnabled())
+		s_sprite2DCommands.fetch_add(1, std::memory_order_relaxed);
+}
+
+void noteTexrectScratchTarget(unsigned int framebuffer, unsigned int texture,
+	unsigned int width, unsigned int height)
+{
+	if (!isStereoEnabled())
+		return;
+	s_texrectScratchFramebuffer.store(framebuffer, std::memory_order_relaxed);
+	s_texrectScratchTexture.store(texture, std::memory_order_relaxed);
+	s_texrectScratchWidth.store(width, std::memory_order_relaxed);
+	s_texrectScratchHeight.store(height, std::memory_order_relaxed);
+}
+
+void noteTexrectScratchDraw(unsigned int rectangles)
+{
+	if (!isStereoEnabled())
+		return;
+	s_texrectScratchDraws.fetch_add(1, std::memory_order_relaxed);
+	s_texrectScratchRectangles.fetch_add(rectangles, std::memory_order_relaxed);
+}
+
+void noteFinalFramebufferBlit(unsigned int readFramebuffer, unsigned int texture,
+	unsigned int physicalSourceWidth, unsigned int logicalSourceWidth,
+	unsigned int sourceHeight, unsigned int physicalDestinationWidth,
+	unsigned int logicalDestinationWidth, unsigned int destinationHeight,
+	int sourceX0, int sourceX1, int destinationX0, int destinationX1,
+	unsigned int filter)
+{
+	if (!isStereoEnabled())
+		return;
+	s_finalFramebufferBlits.fetch_add(1, std::memory_order_relaxed);
+	s_lastFinalReadFramebuffer.store(readFramebuffer, std::memory_order_relaxed);
+	s_lastFinalTexture.store(texture, std::memory_order_relaxed);
+	s_lastFinalPhysicalSourceWidth.store(physicalSourceWidth, std::memory_order_relaxed);
+	s_lastFinalLogicalSourceWidth.store(logicalSourceWidth, std::memory_order_relaxed);
+	s_lastFinalSourceHeight.store(sourceHeight, std::memory_order_relaxed);
+	s_lastFinalPhysicalDestinationWidth.store(physicalDestinationWidth,
+		std::memory_order_relaxed);
+	s_lastFinalLogicalDestinationWidth.store(logicalDestinationWidth,
+		std::memory_order_relaxed);
+	s_lastFinalDestinationHeight.store(destinationHeight, std::memory_order_relaxed);
+	s_lastFinalSourceX0.store(sourceX0, std::memory_order_relaxed);
+	s_lastFinalSourceX1.store(sourceX1, std::memory_order_relaxed);
+	s_lastFinalDestinationX0.store(destinationX0, std::memory_order_relaxed);
+	s_lastFinalDestinationX1.store(destinationX1, std::memory_order_relaxed);
+	s_lastFinalFilter.store(filter, std::memory_order_relaxed);
+	const unsigned int classification = (isPackedFramebuffer(readFramebuffer) ? 1U : 0U) |
+		(isPackedFramebuffer(0) ? 2U : 0U);
+	s_lastFinalClassification.store(classification, std::memory_order_relaxed);
+}
+
 BlitScope::BlitScope(unsigned int readFramebuffer, unsigned int drawFramebuffer)
 	: m_active(isStereoEnabled())
+	, m_sourcePacked(isPackedFramebuffer(readFramebuffer))
+	, m_destinationPacked(isPackedFramebuffer(drawFramebuffer))
 	, m_sourceWidth(getFramebufferWidth(readFramebuffer))
 	, m_destinationWidth(getFramebufferWidth(drawFramebuffer))
+	, m_sourceCoordinateWidth(getFramebufferCoordinateWidth(readFramebuffer, m_sourceWidth))
+	, m_destinationCoordinateWidth(getFramebufferCoordinateWidth(drawFramebuffer,
+		m_destinationWidth))
 {
-	m_active = m_active && m_sourceWidth >= 2 && m_destinationWidth >= 2;
+	// Stereo duplication is driven by the destination. A mono source is sampled
+	// unchanged for both eyes; a packed source selects the corresponding eye.
+	m_active = m_active && m_destinationPacked && m_destinationWidth >= 2 &&
+		m_sourceWidth > 0;
+	if (m_active)
+		s_framebufferBlits.fetch_add(1, std::memory_order_relaxed);
 }
 
 unsigned int BlitScope::eyeCount() const
@@ -736,25 +1316,65 @@ unsigned int BlitScope::eyeCount() const
 
 int BlitScope::mapSourceX(int value, unsigned int eye) const
 {
-	return m_active ? mapEyeCoordinate(value, m_sourceWidth, eye) : value;
+	return m_active && m_sourcePacked
+		? mapEyeCoordinate(value, m_sourceWidth, m_sourceCoordinateWidth, eye)
+		: value;
 }
 
 int BlitScope::mapDestinationX(int value, unsigned int eye) const
 {
-	return m_active ? mapEyeCoordinate(value, m_destinationWidth, eye) : value;
+	return m_active && m_destinationPacked
+		? mapEyeCoordinate(value, m_destinationWidth, m_destinationCoordinateWidth, eye)
+		: value;
 }
 
-DrawScope::DrawScope(bool transformGeometry)
-	: m_active(isStereoEnabled() && s_viewport.width >= 2 && s_viewport.height > 0)
+DrawScope::DrawScope(PrimitiveClass primitiveClass, bool transformGeometry,
+	bool correctScreenSpaceProjection, bool sourceTexturePacked,
+	unsigned int vertices, unsigned int modifiedPositionVertices)
+	: m_active(isStereoEnabled() && isPackedFramebuffer(s_drawFramebuffer) &&
+		s_viewport.width >= 2 && s_viewport.height > 0)
 	, m_transformGeometry(transformGeometry)
+	, m_correctScreenSpaceProjection(correctScreenSpaceProjection)
+	, m_sourceTexturePacked(sourceTexturePacked)
 	, m_targetWidth(getDrawTargetWidth())
+	, m_coordinateWidth(getDrawCoordinateWidth(m_targetWidth))
 {
+	if (s_resetDrawClassDiagnosticsRequested.exchange(false,
+		std::memory_order_acq_rel)) {
+		resetDrawClassDiagnostics();
+		emitDrawClassDiagnostic(
+			"Quest VR draw-class capture re-armed after renderer recenter");
+	}
 	m_active = m_active && m_targetWidth >= 2;
 	if (m_active) {
-		if (m_transformGeometry)
+		if (m_transformGeometry) {
 			s_geometryDraws.fetch_add(1, std::memory_order_relaxed);
-		else
+			std::array<float, 16> worldProjection{};
+			bool projectionContainsView = false;
+			const bool perspective = getWorldProjection(worldProjection,
+				projectionContainsView);
+			if (perspective) {
+				s_perspectiveDraws.fetch_add(1, std::memory_order_relaxed);
+				if (projectionContainsView)
+					s_foldedPerspectiveDraws.fetch_add(1, std::memory_order_relaxed);
+				else
+					s_canonicalPerspectiveDraws.fetch_add(1, std::memory_order_relaxed);
+				const auto program = s_programs.find(s_currentProgram);
+				if (program == s_programs.end() || program->second.transformEnabled < 0 ||
+					program->second.rows[0] < 0 || program->second.rows[1] < 0 ||
+					program->second.rows[2] < 0 || program->second.rows[3] < 0) {
+					s_missingTransformProgramDraws.fetch_add(1,
+						std::memory_order_relaxed);
+				}
+			} else {
+				s_orthographicDraws.fetch_add(1, std::memory_order_relaxed);
+			}
+		} else {
 			s_rectangleDraws.fetch_add(1, std::memory_order_relaxed);
+		}
+		logDrawClass(primitiveClass, m_transformGeometry,
+			m_correctScreenSpaceProjection, m_sourceTexturePacked, m_targetWidth,
+			m_coordinateWidth, vertices, modifiedPositionVertices);
 	}
 }
 
@@ -762,7 +1382,8 @@ DrawScope::~DrawScope()
 {
 	if (!m_active)
 		return;
-	setProgramEye(0, false, m_transformGeometry);
+	setProgramEye(0, false, m_transformGeometry, m_correctScreenSpaceProjection,
+		m_sourceTexturePacked);
 	glViewport(s_viewport.x, s_viewport.y, s_viewport.width, s_viewport.height);
 	if (s_scissorEnabled)
 		glScissor(s_scissor.x, s_scissor.y, s_scissor.width, s_scissor.height);
@@ -778,21 +1399,25 @@ void DrawScope::selectEye(unsigned int eye)
 	if (!m_active)
 		return;
 	s_eyeDraws.fetch_add(1, std::memory_order_relaxed);
+	if (m_correctScreenSpaceProjection) {
+		s_screenSpaceEyeDraws[std::min(eye, 1U)].fetch_add(1,
+			std::memory_order_relaxed);
+	}
 
 	const int leftTargetWidth = m_targetWidth / 2;
 	const int eyeTargetX = eye == 0 ? 0 : leftTargetWidth;
 	const int eyeTargetWidth = eye == 0 ? leftTargetWidth : m_targetWidth - leftTargetWidth;
-	const int viewportStart = mapCoordinate(s_viewport.x, 0, m_targetWidth,
+	const int viewportStart = mapCoordinate(s_viewport.x, 0, m_coordinateWidth,
 		eyeTargetX, eyeTargetWidth);
-	const int viewportEnd = mapCoordinate(s_viewport.x + s_viewport.width, 0, m_targetWidth,
+	const int viewportEnd = mapCoordinate(s_viewport.x + s_viewport.width, 0, m_coordinateWidth,
 		eyeTargetX, eyeTargetWidth);
 	glViewport(viewportStart, s_viewport.y, viewportEnd - viewportStart, s_viewport.height);
 
 	if (s_scissorEnabled) {
-		const int mappedStart = mapCoordinate(s_scissor.x, 0, m_targetWidth,
+		const int mappedStart = mapCoordinate(s_scissor.x, 0, m_coordinateWidth,
 			eyeTargetX, eyeTargetWidth);
 		const int mappedEnd = mapCoordinate(s_scissor.x + s_scissor.width, 0,
-			m_targetWidth, eyeTargetX, eyeTargetWidth);
+			m_coordinateWidth, eyeTargetX, eyeTargetWidth);
 		const int clampedStart = std::max(eyeTargetX,
 			std::min(eyeTargetX + eyeTargetWidth, mappedStart));
 		const int clampedEnd = std::max(clampedStart,
@@ -800,7 +1425,8 @@ void DrawScope::selectEye(unsigned int eye)
 		glScissor(clampedStart, s_scissor.y, clampedEnd - clampedStart, s_scissor.height);
 	}
 
-	setProgramEye(eye, true, m_transformGeometry);
+	setProgramEye(eye, true, m_transformGeometry, m_correctScreenSpaceProjection,
+		m_sourceTexturePacked);
 }
 
 } // namespace QuestVr
@@ -811,10 +1437,79 @@ void DrawScope::selectEye(unsigned int eye)
 #define QUEST_VR_EXPORT
 #endif
 
+extern "C" QUEST_VR_EXPORT void M64PQuestVrSetDiagnosticSink(
+	void (*sink)(const char*))
+{
+	s_diagnosticSink.store(sink, std::memory_order_release);
+}
+
 extern "C" QUEST_VR_EXPORT void M64PQuestVrSetEnabled(int enabled)
 {
 	s_enabled.store(enabled != 0, std::memory_order_release);
 	if (enabled != 0) {
+		QuestVr::resetProjectionTracking();
+		resetDrawClassDiagnostics();
+		s_geometryDraws.store(0, std::memory_order_relaxed);
+		s_rectangleDraws.store(0, std::memory_order_relaxed);
+		s_eyeDraws.store(0, std::memory_order_relaxed);
+		s_perspectiveDraws.store(0, std::memory_order_relaxed);
+		s_orthographicDraws.store(0, std::memory_order_relaxed);
+		s_canonicalPerspectiveDraws.store(0, std::memory_order_relaxed);
+		s_foldedPerspectiveDraws.store(0, std::memory_order_relaxed);
+		s_projectionLoads.store(0, std::memory_order_relaxed);
+		s_foldedProjectionMultiplies.store(0, std::memory_order_relaxed);
+		s_missingTransformProgramDraws.store(0, std::memory_order_relaxed);
+		s_geometryVertices.store(0, std::memory_order_relaxed);
+		s_modifiedPositionVertices.store(0, std::memory_order_relaxed);
+		s_framebufferBlits.store(0, std::memory_order_relaxed);
+		s_backgroundRectangles.store(0, std::memory_order_relaxed);
+		s_sprite2DCommands.store(0, std::memory_order_relaxed);
+		s_screenSpaceBatches.store(0, std::memory_order_relaxed);
+		s_screenSpaceVertices.store(0, std::memory_order_relaxed);
+		for (unsigned int eye = 0; eye < 2; ++eye) {
+			s_screenSpaceEyeDraws[eye].store(0, std::memory_order_relaxed);
+			s_screenSpaceCorrections[eye].store(0, std::memory_order_relaxed);
+			s_lastScreenSpaceOffsetXMicro[eye].store(0, std::memory_order_relaxed);
+			s_lastScreenSpaceOffsetYMicro[eye].store(0, std::memory_order_relaxed);
+		}
+		s_screenSpaceMissingUniformDraws.store(0, std::memory_order_relaxed);
+		s_lastScreenSpaceFramebuffer.store(0, std::memory_order_relaxed);
+		s_lastScreenSpaceProgram.store(0, std::memory_order_relaxed);
+		s_lastScreenSpaceUniformMask.store(0, std::memory_order_relaxed);
+		s_texrectScratchDraws.store(0, std::memory_order_relaxed);
+		s_texrectScratchRectangles.store(0, std::memory_order_relaxed);
+		s_texrectScratchFramebuffer.store(0, std::memory_order_relaxed);
+		s_texrectScratchTexture.store(0, std::memory_order_relaxed);
+		s_texrectScratchWidth.store(0, std::memory_order_relaxed);
+		s_texrectScratchHeight.store(0, std::memory_order_relaxed);
+		s_finalFramebufferBlits.store(0, std::memory_order_relaxed);
+		s_lastFinalReadFramebuffer.store(0, std::memory_order_relaxed);
+		s_lastFinalTexture.store(0, std::memory_order_relaxed);
+		s_lastFinalPhysicalSourceWidth.store(0, std::memory_order_relaxed);
+		s_lastFinalLogicalSourceWidth.store(0, std::memory_order_relaxed);
+		s_lastFinalSourceHeight.store(0, std::memory_order_relaxed);
+		s_lastFinalPhysicalDestinationWidth.store(0, std::memory_order_relaxed);
+		s_lastFinalLogicalDestinationWidth.store(0, std::memory_order_relaxed);
+		s_lastFinalDestinationHeight.store(0, std::memory_order_relaxed);
+		s_lastFinalSourceX0.store(0, std::memory_order_relaxed);
+		s_lastFinalSourceX1.store(0, std::memory_order_relaxed);
+		s_lastFinalDestinationX0.store(0, std::memory_order_relaxed);
+		s_lastFinalDestinationX1.store(0, std::memory_order_relaxed);
+		s_lastFinalFilter.store(0, std::memory_order_relaxed);
+		s_lastFinalClassification.store(0, std::memory_order_relaxed);
+		s_targetWidthFallbacks.store(0, std::memory_order_relaxed);
+		s_lastTargetWidth.store(0, std::memory_order_relaxed);
+		s_framebufferAllocations.store(0, std::memory_order_relaxed);
+		s_lastFramebufferN64Width.store(0, std::memory_order_relaxed);
+		s_lastFramebufferN64Height.store(0, std::memory_order_relaxed);
+		s_lastFramebufferPhysicalWidth.store(0, std::memory_order_relaxed);
+		s_lastFramebufferPhysicalHeight.store(0, std::memory_order_relaxed);
+		s_lastFramebufferScaleMilli.store(0, std::memory_order_relaxed);
+		s_lastNativeResolutionFactor.store(0, std::memory_order_relaxed);
+		s_lastViewportWidth.store(0, std::memory_order_relaxed);
+		s_lastViewportHeight.store(0, std::memory_order_relaxed);
+		s_lastScissorWidth.store(0, std::memory_order_relaxed);
+		s_lastScissorHeight.store(0, std::memory_order_relaxed);
 		s_recenterRequested.store(true, std::memory_order_release);
 		s_haveRuntimeViews.store(false, std::memory_order_release);
 		s_havePendingRuntimeViews.store(false, std::memory_order_release);
@@ -897,11 +1592,16 @@ extern "C" QUEST_VR_EXPORT void M64PQuestVrConfigure(int stereoEnabled, float ip
 extern "C" QUEST_VR_EXPORT void M64PQuestVrRecenter()
 {
 	s_recenterRequested.store(true, std::memory_order_release);
+	s_resetDrawClassDiagnosticsRequested.store(true, std::memory_order_release);
 }
 
 extern "C" QUEST_VR_EXPORT void M64PQuestVrGetStats(unsigned int* geometryDraws,
 	unsigned int* rectangleDraws, unsigned int* eyeDraws, unsigned int* poseGeneration,
-	unsigned int* targetWidthFallbacks, unsigned int* lastTargetWidth)
+	unsigned int* targetWidthFallbacks, unsigned int* lastTargetWidth,
+	unsigned int* perspectiveDraws, unsigned int* orthographicDraws,
+	unsigned int* missingTransformProgramDraws, unsigned int* geometryVertices,
+	unsigned int* modifiedPositionVertices, unsigned int* framebufferBlits,
+	unsigned int* backgroundRectangles, unsigned int* sprite2DCommands)
 {
 	if (geometryDraws != nullptr)
 		*geometryDraws = s_geometryDraws.load(std::memory_order_relaxed);
@@ -915,6 +1615,165 @@ extern "C" QUEST_VR_EXPORT void M64PQuestVrGetStats(unsigned int* geometryDraws,
 		*targetWidthFallbacks = s_targetWidthFallbacks.load(std::memory_order_relaxed);
 	if (lastTargetWidth != nullptr)
 		*lastTargetWidth = s_lastTargetWidth.load(std::memory_order_relaxed);
+	if (perspectiveDraws != nullptr)
+		*perspectiveDraws = s_perspectiveDraws.load(std::memory_order_relaxed);
+	if (orthographicDraws != nullptr)
+		*orthographicDraws = s_orthographicDraws.load(std::memory_order_relaxed);
+	if (missingTransformProgramDraws != nullptr)
+		*missingTransformProgramDraws =
+			s_missingTransformProgramDraws.load(std::memory_order_relaxed);
+	if (geometryVertices != nullptr)
+		*geometryVertices = s_geometryVertices.load(std::memory_order_relaxed);
+	if (modifiedPositionVertices != nullptr)
+		*modifiedPositionVertices =
+			s_modifiedPositionVertices.load(std::memory_order_relaxed);
+	if (framebufferBlits != nullptr)
+		*framebufferBlits = s_framebufferBlits.load(std::memory_order_relaxed);
+	if (backgroundRectangles != nullptr)
+		*backgroundRectangles = s_backgroundRectangles.load(std::memory_order_relaxed);
+	if (sprite2DCommands != nullptr)
+		*sprite2DCommands = s_sprite2DCommands.load(std::memory_order_relaxed);
+}
+
+extern "C" QUEST_VR_EXPORT void M64PQuestVrGetPipelineStats(
+	unsigned int* canonicalPerspectiveDraws, unsigned int* foldedPerspectiveDraws,
+	unsigned int* projectionLoads, unsigned int* foldedProjectionMultiplies,
+	unsigned int* framebufferAllocations, unsigned int* framebufferN64Width,
+	unsigned int* framebufferN64Height, unsigned int* framebufferPhysicalWidth,
+	unsigned int* framebufferPhysicalHeight, unsigned int* framebufferScaleMilli,
+	unsigned int* nativeResolutionFactor, unsigned int* viewportWidth,
+	unsigned int* viewportHeight, unsigned int* scissorWidth,
+	unsigned int* scissorHeight)
+{
+	if (canonicalPerspectiveDraws != nullptr)
+		*canonicalPerspectiveDraws =
+			s_canonicalPerspectiveDraws.load(std::memory_order_relaxed);
+	if (foldedPerspectiveDraws != nullptr)
+		*foldedPerspectiveDraws = s_foldedPerspectiveDraws.load(std::memory_order_relaxed);
+	if (projectionLoads != nullptr)
+		*projectionLoads = s_projectionLoads.load(std::memory_order_relaxed);
+	if (foldedProjectionMultiplies != nullptr)
+		*foldedProjectionMultiplies =
+			s_foldedProjectionMultiplies.load(std::memory_order_relaxed);
+	if (framebufferAllocations != nullptr)
+		*framebufferAllocations = s_framebufferAllocations.load(std::memory_order_relaxed);
+	if (framebufferN64Width != nullptr)
+		*framebufferN64Width = s_lastFramebufferN64Width.load(std::memory_order_relaxed);
+	if (framebufferN64Height != nullptr)
+		*framebufferN64Height = s_lastFramebufferN64Height.load(std::memory_order_relaxed);
+	if (framebufferPhysicalWidth != nullptr)
+		*framebufferPhysicalWidth =
+			s_lastFramebufferPhysicalWidth.load(std::memory_order_relaxed);
+	if (framebufferPhysicalHeight != nullptr)
+		*framebufferPhysicalHeight =
+			s_lastFramebufferPhysicalHeight.load(std::memory_order_relaxed);
+	if (framebufferScaleMilli != nullptr)
+		*framebufferScaleMilli = s_lastFramebufferScaleMilli.load(std::memory_order_relaxed);
+	if (nativeResolutionFactor != nullptr)
+		*nativeResolutionFactor = s_lastNativeResolutionFactor.load(std::memory_order_relaxed);
+	if (viewportWidth != nullptr)
+		*viewportWidth = s_lastViewportWidth.load(std::memory_order_relaxed);
+	if (viewportHeight != nullptr)
+		*viewportHeight = s_lastViewportHeight.load(std::memory_order_relaxed);
+	if (scissorWidth != nullptr)
+		*scissorWidth = s_lastScissorWidth.load(std::memory_order_relaxed);
+	if (scissorHeight != nullptr)
+		*scissorHeight = s_lastScissorHeight.load(std::memory_order_relaxed);
+}
+
+extern "C" QUEST_VR_EXPORT void M64PQuestVrGetUiStats(
+	unsigned int* screenSpaceBatches, unsigned int* screenSpaceVertices,
+	unsigned int* leftEyeDraws, unsigned int* rightEyeDraws,
+	unsigned int* leftCorrections, unsigned int* rightCorrections,
+	unsigned int* missingUniformDraws, unsigned int* lastFramebuffer,
+	unsigned int* lastProgram, unsigned int* lastUniformMask,
+	std::int32_t* leftOffsetXMicro, std::int32_t* leftOffsetYMicro,
+	std::int32_t* rightOffsetXMicro, std::int32_t* rightOffsetYMicro,
+	unsigned int* finalBlits, unsigned int* finalReadFramebuffer,
+	unsigned int* finalTexture, unsigned int* finalPhysicalSourceWidth,
+	unsigned int* finalLogicalSourceWidth, unsigned int* finalSourceHeight,
+	unsigned int* finalPhysicalDestinationWidth,
+	unsigned int* finalLogicalDestinationWidth,
+	unsigned int* finalDestinationHeight, std::int32_t* finalSourceX0,
+	std::int32_t* finalSourceX1, std::int32_t* finalDestinationX0,
+	std::int32_t* finalDestinationX1, unsigned int* finalFilter,
+	unsigned int* finalClassification,
+	unsigned int* scratchDraws, unsigned int* scratchRectangles,
+	unsigned int* scratchFramebuffer, unsigned int* scratchTexture,
+	unsigned int* scratchWidth, unsigned int* scratchHeight)
+{
+	if (screenSpaceBatches != nullptr)
+		*screenSpaceBatches = s_screenSpaceBatches.load(std::memory_order_relaxed);
+	if (screenSpaceVertices != nullptr)
+		*screenSpaceVertices = s_screenSpaceVertices.load(std::memory_order_relaxed);
+	if (leftEyeDraws != nullptr)
+		*leftEyeDraws = s_screenSpaceEyeDraws[0].load(std::memory_order_relaxed);
+	if (rightEyeDraws != nullptr)
+		*rightEyeDraws = s_screenSpaceEyeDraws[1].load(std::memory_order_relaxed);
+	if (leftCorrections != nullptr)
+		*leftCorrections = s_screenSpaceCorrections[0].load(std::memory_order_relaxed);
+	if (rightCorrections != nullptr)
+		*rightCorrections = s_screenSpaceCorrections[1].load(std::memory_order_relaxed);
+	if (missingUniformDraws != nullptr)
+		*missingUniformDraws = s_screenSpaceMissingUniformDraws.load(std::memory_order_relaxed);
+	if (lastFramebuffer != nullptr)
+		*lastFramebuffer = s_lastScreenSpaceFramebuffer.load(std::memory_order_relaxed);
+	if (lastProgram != nullptr)
+		*lastProgram = s_lastScreenSpaceProgram.load(std::memory_order_relaxed);
+	if (lastUniformMask != nullptr)
+		*lastUniformMask = s_lastScreenSpaceUniformMask.load(std::memory_order_relaxed);
+	if (leftOffsetXMicro != nullptr)
+		*leftOffsetXMicro = s_lastScreenSpaceOffsetXMicro[0].load(std::memory_order_relaxed);
+	if (leftOffsetYMicro != nullptr)
+		*leftOffsetYMicro = s_lastScreenSpaceOffsetYMicro[0].load(std::memory_order_relaxed);
+	if (rightOffsetXMicro != nullptr)
+		*rightOffsetXMicro = s_lastScreenSpaceOffsetXMicro[1].load(std::memory_order_relaxed);
+	if (rightOffsetYMicro != nullptr)
+		*rightOffsetYMicro = s_lastScreenSpaceOffsetYMicro[1].load(std::memory_order_relaxed);
+	if (finalBlits != nullptr)
+		*finalBlits = s_finalFramebufferBlits.load(std::memory_order_relaxed);
+	if (finalReadFramebuffer != nullptr)
+		*finalReadFramebuffer = s_lastFinalReadFramebuffer.load(std::memory_order_relaxed);
+	if (finalTexture != nullptr)
+		*finalTexture = s_lastFinalTexture.load(std::memory_order_relaxed);
+	if (finalPhysicalSourceWidth != nullptr)
+		*finalPhysicalSourceWidth = s_lastFinalPhysicalSourceWidth.load(std::memory_order_relaxed);
+	if (finalLogicalSourceWidth != nullptr)
+		*finalLogicalSourceWidth = s_lastFinalLogicalSourceWidth.load(std::memory_order_relaxed);
+	if (finalSourceHeight != nullptr)
+		*finalSourceHeight = s_lastFinalSourceHeight.load(std::memory_order_relaxed);
+	if (finalPhysicalDestinationWidth != nullptr)
+		*finalPhysicalDestinationWidth =
+			s_lastFinalPhysicalDestinationWidth.load(std::memory_order_relaxed);
+	if (finalLogicalDestinationWidth != nullptr)
+		*finalLogicalDestinationWidth =
+			s_lastFinalLogicalDestinationWidth.load(std::memory_order_relaxed);
+	if (finalDestinationHeight != nullptr)
+		*finalDestinationHeight = s_lastFinalDestinationHeight.load(std::memory_order_relaxed);
+	if (finalSourceX0 != nullptr)
+		*finalSourceX0 = s_lastFinalSourceX0.load(std::memory_order_relaxed);
+	if (finalSourceX1 != nullptr)
+		*finalSourceX1 = s_lastFinalSourceX1.load(std::memory_order_relaxed);
+	if (finalDestinationX0 != nullptr)
+		*finalDestinationX0 = s_lastFinalDestinationX0.load(std::memory_order_relaxed);
+	if (finalDestinationX1 != nullptr)
+		*finalDestinationX1 = s_lastFinalDestinationX1.load(std::memory_order_relaxed);
+	if (finalFilter != nullptr)
+		*finalFilter = s_lastFinalFilter.load(std::memory_order_relaxed);
+	if (finalClassification != nullptr)
+		*finalClassification = s_lastFinalClassification.load(std::memory_order_relaxed);
+	if (scratchDraws != nullptr)
+		*scratchDraws = s_texrectScratchDraws.load(std::memory_order_relaxed);
+	if (scratchRectangles != nullptr)
+		*scratchRectangles = s_texrectScratchRectangles.load(std::memory_order_relaxed);
+	if (scratchFramebuffer != nullptr)
+		*scratchFramebuffer = s_texrectScratchFramebuffer.load(std::memory_order_relaxed);
+	if (scratchTexture != nullptr)
+		*scratchTexture = s_texrectScratchTexture.load(std::memory_order_relaxed);
+	if (scratchWidth != nullptr)
+		*scratchWidth = s_texrectScratchWidth.load(std::memory_order_relaxed);
+	if (scratchHeight != nullptr)
+		*scratchHeight = s_texrectScratchHeight.load(std::memory_order_relaxed);
 }
 
 extern "C" QUEST_VR_EXPORT std::int64_t M64PQuestVrGetPresentedPoseTimestamp()

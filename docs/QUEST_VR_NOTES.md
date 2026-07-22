@@ -1,8 +1,14 @@
 # Quest VR prototype notes
 
+The latest Mario Kart race-camera, framebuffer-resolution, and hardware-test analysis is in
+[`QUEST_VR_MARIO_KART_CAMERA_AUDIT.md`](QUEST_VR_MARIO_KART_CAMERA_AUDIT.md). It supersedes the
+older assumption below that Mario Kart race draws were genuinely orthographic: the game commonly
+folds `guLookAt` into a real perspective projection, which the prototype previously misclassified.
+
 ## Status
 
-Branch: `quest-vr-prototype`
+Audit branch: `ppsspp-openxr-audit` (based directly on `quest-vr-prototype` at
+`ba0b775d596a0a79f0cf46201b045140229719bc`)
 
 Primary target: Meta Quest 3, GLideN64, Mario Kart 64 (one-player Time Trial on Luigi Raceway).
 
@@ -31,8 +37,8 @@ The prototype currently contains:
   cost while a proper anisotropic per-eye render-target path is developed;
 - expanded GLideN64 CPU clipping while stereo is active;
 - an OpenXR Touch action-set fallback merged with the normal player-one controller state;
-- a Mario Kart 64 profile using GLideN64's existing `hack_MK64` ROM identification, with a modest
-  close-chase offset restricted to perspective passes that advertise N64 Z-buffering;
+- a Mario Kart 64 profile using GLideN64's existing `hack_MK64` ROM identification, with recovery
+  for race views folded into the projection stack and optional camera offsets that default to zero;
 - automatic fallback to the existing Android presentation path when no VR headset/runtime is present.
 
 This is native stereo geometry work, not a completed-frame texture copied to both eyes. The OpenXR
@@ -57,7 +63,12 @@ flags. The current build fixes that blind spot and the Android launch mismatch:
 - session, `shouldRender`, locate-view fallback, first-layer, EGL, GLES, and OpenXR failures now leave
   concise logcat breadcrumbs.
 
-This build still needs a Quest 3 retest. Treat it as an instrumented prototype rather than a release.
+The PPSSPP comparison and current proof sequence are documented in
+[`PPSSPP_OPENXR_AUDIT.md`](PPSSPP_OPENXR_AUDIT.md). The audit build first submits a bright green
+head-locked quad, then red/blue projection views, then the emulator source when new SurfaceTexture
+frames are proven. Each interval counts only while the session is VISIBLE/FOCUSED, and source-shader
+failure can no longer prevent the diagnostic layers. This build still needs a Quest 3 retest. Treat
+it as an instrumented prototype rather than a release.
 
 ## Existing renderer architecture
 
@@ -177,12 +188,16 @@ malformed. Defaults are:
 
 | Key | Default | Current use |
 | --- | ---: | --- |
-| `enabled` | `true` | Enables OpenXR on devices advertising VR head tracking |
+| `enabled` | `true` | Attempts OpenXR; the runtime, not the PackageManager head-tracking feature, decides availability |
+| `presentation_mode` | `immersive_projection` | Selects native projection views or the paired LOCAL-space cinema quads |
+| `immersive_view_scale` | `1.0` | 0.5-1.0 scale applied after aspect-fitting the source into projection swapchains |
 | `stereo_enabled` | `true` | Enables GLideN64 side-by-side geometry |
 | `swap_eyes` | `false` | Exchanges source halves to diagnose or correct inverted stereo |
 | `ipd_meters` | `0.064` | Scales the runtime eye baseline to the requested stereo separation |
 | `world_units_per_meter` | `64.0` | Maps tracked metres to N64 view units |
 | `rotation_strength` | `1.0` | Scales recentered headset rotation |
+| `screen_scale` | `1.0` | Cinema-only physical screen-size multiplier |
+| `screen_distance_meters` | `2.0` | Cinema-only LOCAL-space anchor distance |
 | `position_enabled` | `false` | Enables positional head translation |
 | `max_translation_meters` | `0.15` | Comfort/culling limit for translation |
 | `camera_offset_x_meters` | `0.0` | Head-relative camera offset |
@@ -195,13 +210,14 @@ malformed. Defaults are:
 | `hud_mode` | `monoscopic_overlay` | Documents the current zero-disparity HUD policy |
 | `culling_expansion` | `1.25` | Reserved for a graduated clipping policy |
 | `use_openxr_fov` | `true` | Replaces perspective angular terms with each runtime eye FOV |
-| `mario_kart_profile_enabled` | `true` | Enables the title-scoped close-chase experiment |
-| `mario_kart_camera_offset_y_meters` | `-0.20` | Lowers the tracked camera for MK64 Z-buffered world passes |
-| `mario_kart_camera_offset_z_meters` | `-0.75` | Moves the tracked camera toward the kart for MK64 world passes |
-| `stereo_source_width_scale` | `1.0` | Experimental multiplier for GLideN64's full SBS source width |
-| `max_stereo_source_width` | `4096` | Caps the full side-by-side source width |
+| `mario_kart_profile_enabled` | `true` | Enables title-scoped folded race-camera recovery |
+| `mario_kart_camera_offset_y_meters` | `0.0` | Optional recovered camera-space height offset |
+| `mario_kart_camera_offset_z_meters` | `0.0` | Optional recovered camera-space chase-distance offset |
+| `stereo_source_width_multiplier_v2` | `2.0` | Aspect-preserving source multiplier; 2 requests the selected flat size for each eye |
+| `max_stereo_source_width` | `2688` | User cap for the complete side-by-side source width |
 | `touch_controller_enabled` | `true` | Merges OpenXR Touch input into N64 player one |
 | `debug_logging` | `true` | Periodically logs pose, draw counters, and OpenXR frame timings |
+| `startup_proof_layers` | `false` | Debug-only green and red/blue composition proofs |
 
 Positional tracking is intentionally off by default for the first Quest build. Orientation and eye
 separation are active. The renderer automatically captures the first valid headset pose as its
@@ -211,6 +227,9 @@ Prototype diagnostics log average `xrWaitFrame` time, native frame-loop work tim
 work-time sample, source/swapchain dimensions, geometry/rectangle/eye draw totals, the last stereo
 target width, and any render-target dimension fallbacks. GLES and incomplete-framebuffer failures
 are always logged even when periodic diagnostics are disabled.
+
+The latest session also writes a line-flushed persistent report. Export it without ADB from
+**Gallery drawer → Display → Quest VR prototype → Export latest VR diagnostic**.
 
 ## Build and CI
 
@@ -265,10 +284,10 @@ GLideN64 plugin before uploading it as a build artifact. The application already
 - Rectangle HUD elements have zero disparity but are not yet submitted as an OpenXR quad layer.
 - The original Android game sidebar is not yet reproduced in an immersive layer.
 - OpenXR swapchain rendering is single-sample, and no foveation extension is enabled.
-- Each eye currently receives half the configured source's horizontal pixels. Raising the
-  experimental source-width scale can recover detail, but GLideN64 uses a scalar internal
-  framebuffer scale, so a naive 2x width can also inflate offscreen height and cost much more than
-  2x. It remains at 1x until the framebuffer allocator supports independent stereo X/Y scaling.
+- Stereo sizing now preserves the selected per-eye aspect and defaults to a full per-eye request,
+  but the safe 2688-wide producer cap means 4:3 presets above roughly 1344x1008 per eye deliberately
+  converge on the same 2688x1008 total plateau. Higher presets cannot add detail until the
+  SurfaceTexture/EGL failure above the observed 2800-wide range is understood.
 - A 30 FPS N64 title is latched into a higher-rate OpenXR loop. Source-pose metadata now permits
   runtime reprojection of held frames, but game-world animation and camera translation still update
   at emulation cadence, and the association needs on-device timing validation.
@@ -280,12 +299,11 @@ GLideN64 plugin before uploading it as a build artifact. The application already
 
 ## First device test checklist
 
-1. Select GLideN64 and launch Mario Kart 64.
-2. Look for roughly 180 compositor frames of solid red in the left eye and blue in the right eye;
-   they should then change automatically to the emulator image.
-3. Confirm OpenXR runtime/session/swapchain messages in logcat. If loading remains, capture lines
-   tagged `M64P-QuestVR`; the periodic state message now distinguishes pre-`READY`,
-   `shouldRender=false`, view fallback, and successful first-layer submission.
+1. Select GLideN64, select immersive projection, leave proof layers off, and launch Mario Kart 64.
+2. Confirm the game appears directly through an `XrCompositionLayerProjection`, then compare with
+   the separate world-locked cinema option.
+3. Confirm OpenXR runtime/session/swapchain messages and source-frame pose matching in the exported
+   persistent log.
 4. Verify each eye receives the correct half (no inverted stereo); toggle **Swap source eyes** and
    relaunch the game if the order is reversed.
 5. Confirm the course geometry has parallax while HUD rectangles remain zero disparity.
@@ -300,7 +318,7 @@ GLideN64 plugin before uploading it as a build artifact. The application already
 1. Fix all CI compiler/linker findings and retain a downloadable APK at every checkpoint.
 2. Validate the target-aware SBS layout and framebuffer sampling on Quest 3, including menus,
    countdowns, transitions, and Mario Kart's framebuffer effects.
-3. Use the new native timing logs to tune `stereo_source_width_scale`, then add GPU timing/foveation
+3. Use the new native timing logs to tune `stereo_source_width_multiplier_v2`, then add GPU timing/foveation
    if the full-resolution default misses the Quest 3 frame budget.
 4. Refine the Mario Kart 64 Z-buffer/projection heuristic from device captures, then identify a
    stable kart/driver-relative transform for an optional first-person profile.

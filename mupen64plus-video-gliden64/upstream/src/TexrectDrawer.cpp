@@ -11,6 +11,7 @@
 #include "RSP.h"
 #include "VI.h"
 #include "FrameBuffer.h"
+#include "QuestVr.h"
 #include "TexrectDrawer.h"
 
 using namespace graphics;
@@ -87,6 +88,8 @@ void TexrectDrawer::init()
 	m_programTex.reset(gfxContext.createTexrectDrawerDrawShader());
 	m_programClear.reset(gfxContext.createTexrectDrawerClearShader());
 	m_programTex->setTextureSize(m_pTexture->width, m_pTexture->height);
+	QuestVr::noteTexrectScratchTarget(u32(m_FBO), u32(m_pTexture->name),
+		m_pTexture->width, m_pTexture->height);
 
 	m_vecRectCoords.reserve(256);
 }
@@ -290,6 +293,7 @@ bool TexrectDrawer::addRect()
 
 void TexrectDrawer::addBackgroundRect()
 {
+	QuestVr::noteBackgroundRectangle();
 	DisplayWindow & wnd = dwnd();
 	GraphicsDrawer &  drawer = wnd.getDrawer();
 	RectVertex * pRect = drawer.m_rect;
@@ -340,6 +344,9 @@ bool TexrectDrawer::draw()
 {
 	if (m_numRects == 0)
 		return false;
+	QuestVr::noteTexrectScratchTarget(u32(m_FBO), u32(m_pTexture->name),
+		m_pTexture->width, m_pTexture->height);
+	QuestVr::noteTexrectScratchDraw(m_numRects);
 
 	ValueKeeper<u64> otherMode(gDP.otherMode._u64, m_otherMode);
 	ValueKeeper<gDPScissor> scissor(gDP.scissor, m_scissor);
@@ -435,6 +442,13 @@ bool TexrectDrawer::draw()
 
 	Context::DrawRectParameters rectParams;
 	rectParams.mode = drawmode::TRIANGLE_STRIP;
+	// The scratch texture contains already-composed mono UI/viewmodel pixels with
+	// no emulated depth. Duplicate it unchanged into both eye viewports so those
+	// pixels remain at zero disparity. Applying the asymmetric-FOV optical-centre
+	// translation here would move the two eye copies in opposite X directions and
+	// displace this layer vertically from other zero-disparity menu geometry.
+	rectParams.questVrScreenSpace = false;
+	rectParams.questVrSourceTexturePacked = false;
 	rectParams.verticesCount = 4;
 	rectParams.vertices = rect;
 	rectParams.combiner = m_programTex.get();
@@ -462,6 +476,7 @@ bool TexrectDrawer::draw()
 	gfxContext.enable(enable::BLEND, false);
 	gfxContext.enable(enable::SCISSOR_TEST, false);
 	rectParams.combiner = m_programClear.get();
+	rectParams.questVrScreenSpace = false;
 	gfxContext.drawRects(rectParams);
 	gfxContext.enable(enable::SCISSOR_TEST, true);
 

@@ -4,6 +4,7 @@
 #include <Textures.h>
 #include <DisplayWindow.h>
 #include <Debugger.h>
+#include <QuestVr.h>
 
 #include <cmath>
 
@@ -169,12 +170,14 @@ public:
 		m_useTile[1] = _useT1;
 		LocateUniform(uTexScale);
 		LocateUniform(uCacheFrameBuffer);
+		LocateUniform(uQuestVrPackedTexture);
 		LocateUniform(uQuestVrTextureSize);
 	}
 
 	void update(bool _force) override
 	{
 		int nFB[2] = { 0, 0 };
+		int packedTexture[2] = { 0, 0 };
 		float textureWidth[2] = { 1.0f, 1.0f };
 		TextureCache & cache = textureCache();
 		for (u32 t = 0; t < 2; ++t) {
@@ -183,11 +186,14 @@ public:
 			CachedTexture *_pTexture = cache.current[t];
 			if (_pTexture != nullptr) {
 				nFB[t] = _pTexture->frameBufferTexture;
+				packedTexture[t] = QuestVr::isPackedFramebufferTexture(
+					static_cast<u32>(_pTexture->name)) ? 1 : 0;
 				textureWidth[t] = static_cast<float>(_pTexture->width);
 			}
 		}
 
 		uCacheFrameBuffer.set(nFB[0], nFB[1], _force);
+		uQuestVrPackedTexture.set(packedTexture[0], packedTexture[1], _force);
 		uQuestVrTextureSize.set(textureWidth[0], textureWidth[1], _force);
 		uTexScale.set(gSP.texture.scales, gSP.texture.scalet, _force);
 	}
@@ -196,6 +202,7 @@ private:
 	bool m_useTile[2];
 	fv2Uniform uTexScale;
 	iv2Uniform uCacheFrameBuffer;
+	iv2Uniform uQuestVrPackedTexture;
 	fv2Uniform uQuestVrTextureSize;
 };
 

@@ -9,6 +9,7 @@ import android.view.SurfaceHolder;
 import androidx.annotation.NonNull;
 
 import paulscode.android.mupen64plusae.questvr.QuestVrBridge;
+import paulscode.android.mupen64plusae.questvr.QuestVrDiagnostics;
 
 /**
  * GameSurface variant that separates the Quest OpenXR renderer lifetime from the temporary
@@ -23,11 +24,16 @@ public final class QuestVrGameSurface extends GameSurface {
 
     @Override
     public void surfaceDestroyed(@NonNull SurfaceHolder holder) {
-        if (QuestVrBridge.shouldRetainRenderThreadOnSurfaceLoss()) {
+        final boolean transientLoss = isTransientVrActivityStop();
+        QuestVrDiagnostics.info(TAG, "surfaceDestroyed transient=" + transientLoss +
+                " surfaceValid=" + holder.getSurface().isValid() +
+                " glStarted=" + mGlContextStarted);
+        if (transientLoss) {
             // Once OpenXR owns presentation, Quest may retire the Android window Surface as part of
             // the 2D-to-immersive transition. The GL context has already been moved to a pbuffer, so
             // stopping the render thread here would immediately destroy the accepted XR session.
-            Log.i(TAG, "Android window surface retired; retaining OpenXR render thread");
+            QuestVrDiagnostics.info(TAG,
+                    "Android window surface retired; retaining OpenXR render thread");
             mSurfaceAvailable = false;
             return;
         }
@@ -54,9 +60,12 @@ public final class QuestVrGameSurface extends GameSurface {
         // by an immediate return to Home. A real user/app exit sets isFinishing/isDestroyed or the
         // native runtime exit flag, and still takes the ordinary cleanup path below.
         if (isTransientVrActivityStop()) {
-            Log.i(TAG, "Ignoring transient Activity stop while OpenXR owns presentation");
+            QuestVrDiagnostics.info(TAG,
+                    "Ignoring transient Activity stop while OpenXR owns presentation");
             return;
         }
+
+        QuestVrDiagnostics.info(TAG, "Final Activity stop; shutting down OpenXR render thread");
 
         // GameSurface historically only stops while the Android Surface is marked available. A VR
         // hand-off deliberately clears that flag, but a final Activity stop must still perform the

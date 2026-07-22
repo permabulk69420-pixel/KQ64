@@ -89,6 +89,7 @@ import paulscode.android.mupen64plusae.persistent.GlobalPrefs;
 import paulscode.android.mupen64plusae.jni.CoreTypes.PakType;
 import paulscode.android.mupen64plusae.profile.ControllerProfile;
 import paulscode.android.mupen64plusae.questvr.QuestVrBridge;
+import paulscode.android.mupen64plusae.questvr.QuestVrDiagnostics;
 import paulscode.android.mupen64plusae.questvr.QuestVrSettings;
 import paulscode.android.mupen64plusae.util.CountryCode;
 import paulscode.android.mupen64plusae.util.DisplayResolutionData;
@@ -174,6 +175,7 @@ public class GameActivity extends AppCompatActivity implements PromptConfirmList
     private boolean mIsNetplayEnabled = false;
     private boolean mIsNetplayServer = false;
     private boolean mForceExit = false;
+    private boolean mQuestVrDiagnosticSession = false;
     private int mServerPort = 0;
 
     // App data and user preferences
@@ -235,6 +237,7 @@ public class GameActivity extends AppCompatActivity implements PromptConfirmList
     protected void onNewIntent( Intent intent )
     {
         Log.i(TAG, "onNewIntent");
+        logQuestVrLifecycle("onNewIntent action=" + intent.getAction());
         // If the activity is already running and is launched again (e.g. from a file manager app),
         // the existing instance will be reused rather than a new one created. This behavior is
         // specified in the manifest (launchMode = singleTask). In that situation, any activities
@@ -268,6 +271,23 @@ public class GameActivity extends AppCompatActivity implements PromptConfirmList
     public void onCreate(Bundle savedInstanceState) {
         Log.i(TAG, "onCreate");
         super.onCreate(savedInstanceState);
+        final Intent launchIntent = getIntent();
+        QuestVrDiagnostics.startSession(this,
+                "GameActivity action=" + (launchIntent == null ? null : launchIntent.getAction()) +
+                        " categories=" + (launchIntent == null ? null : launchIntent.getCategories()) +
+                        " restored=" + (savedInstanceState != null));
+        mQuestVrDiagnosticSession = true;
+
+        final QuestVrSettings.Configuration launchVr = QuestVrSettings.load(this);
+        final boolean nativeLibraryLoaded = QuestVrBridge.isNativeLibraryLoaded();
+        final boolean headTrackingFeature = QuestVrBridge.hasHeadTrackingFeature(this);
+        QuestVrDiagnostics.info(TAG, "VR startup inputs vrEnabled=" + launchVr.enabled +
+                " nativeLibraryLoaded=" + nativeLibraryLoaded +
+                " headTrackingFeature=" + headTrackingFeature +
+                " launchAction=" + (launchIntent == null ? null : launchIntent.getAction()) +
+                " manufacturer=" + Build.MANUFACTURER + " model=" + Build.MODEL +
+                " sdk=" + Build.VERSION.SDK_INT + " build=" + Build.DISPLAY);
+        logQuestVrLifecycle("onCreate after super; persistent diagnostics active");
         super.setTheme( androidx.appcompat.R.style.Theme_AppCompat_NoActionBar );
 
         mAppData = new AppData( this );
@@ -307,6 +327,9 @@ public class GameActivity extends AppCompatActivity implements PromptConfirmList
         mRomArtPath = extras.getString( ActivityHelper.Keys.ROM_ART_PATH );
         mRomGoodName = extras.getString( ActivityHelper.Keys.ROM_GOOD_NAME );
         mRomDisplayName = extras.getString( ActivityHelper.Keys.ROM_DISPLAY_NAME );
+        QuestVrDiagnostics.info(TAG, "ROM identity displayName=\"" + mRomDisplayName +
+                "\" goodName=\"" + mRomGoodName + "\" headerName=\"" + mRomHeaderName +
+                "\" countryCode=" + (mRomCountryCode & 0xFF));
         mDoRestart = extras.getBoolean( ActivityHelper.Keys.DO_RESTART, false );
         mIsNetplayEnabled = extras.getBoolean( ActivityHelper.Keys.NETPLAY_ENABLED, false );
         mIsNetplayServer = extras.getBoolean( ActivityHelper.Keys.NETPLAY_SERVER, false );
@@ -543,6 +566,8 @@ public class GameActivity extends AppCompatActivity implements PromptConfirmList
     {
         super.onStart();
         Log.i(TAG, "onStart");
+        logQuestVrLifecycle("onStart finishing=" + isFinishing() +
+                " destroyed=" + isDestroyed());
 
         final FragmentManager fm = this.getSupportFragmentManager();
 
@@ -559,10 +584,10 @@ public class GameActivity extends AppCompatActivity implements PromptConfirmList
         if(mCoreFragment != null)
         {
             if (!mCoreFragment.IsInProgress()) {
+                final int[] videoRenderSize = getVideoRenderSize();
                 mCoreFragment.startCore(mGlobalPrefs, mGamePrefs, mRomGoodName, mRomDisplayName, mRomPath, mZipPath,
                         mRomMd5, mRomCrc, mRomHeaderName, mRomCountryCode, mRomArtPath, mDoRestart,
-                        getVideoRenderWidth(),
-                        mDisplayResolutionData.getResolutionHeight(mGamePrefs.verticalRenderResolution),
+                        videoRenderSize[0], videoRenderSize[1],
                         mIsNetplayEnabled);
             }
 
@@ -575,24 +600,49 @@ public class GameActivity extends AppCompatActivity implements PromptConfirmList
         mGameSurface.startGlContext();
     }
 
-    private int getVideoRenderWidth()
+    private int[] getVideoRenderSize()
     {
         final int baseWidth =
                 mDisplayResolutionData.getResolutionWidth(mGamePrefs.verticalRenderResolution);
+        final int baseHeight =
+                mDisplayResolutionData.getResolutionHeight(mGamePrefs.verticalRenderResolution);
         final QuestVrSettings.Configuration vr = QuestVrSettings.load(this);
         if (!vr.enabled || !vr.stereoEnabled ||
                 mGamePrefs.videoPluginLib != AppData.VideoPlugin.GLIDEN64 ||
-                !QuestVrBridge.isDeviceCapable(this)) {
-            return baseWidth;
+                !QuestVrBridge.isNativeLibraryLoaded()) {
+            QuestVrDiagnostics.info(TAG, "Producer resolution uses flat path base=" +
+                    baseWidth + "x" + baseHeight + " vrEnabled=" + vr.enabled +
+                    " stereo=" + vr.stereoEnabled + " plugin=" +
+                    mGamePrefs.videoPluginLib + " nativeLibraryLoaded=" +
+                    QuestVrBridge.isNativeLibraryLoaded());
+            return new int[] {baseWidth, baseHeight};
         }
 
-        final float widthScale = Math.max(1.0f, Math.min(2.0f, vr.stereoSourceWidthScale));
-        final int maximumWidth = Math.max(baseWidth, vr.maxStereoSourceWidth);
-        int stereoWidth = Math.min(maximumWidth, Math.round(baseWidth * widthScale));
-        stereoWidth = Math.min(maximumWidth & ~1, (stereoWidth + 1) & ~1);
-        stereoWidth = Math.max(baseWidth, stereoWidth);
-        Log.i(TAG, "Quest VR stereo source width " + baseWidth + " -> " + stereoWidth);
-        return stereoWidth;
+        final QuestVrSettings.SourceRenderSize size =
+                QuestVrSettings.resolveStereoSourceSize(baseWidth, baseHeight, vr);
+        QuestVrDiagnostics.info(TAG, "Quest VR producer resolution selectedPerEye=" +
+                size.baseWidth + "x" + size.baseHeight + " widthMultiplier=" +
+                vr.stereoSourceWidthMultiplier + " requestedTotal=" +
+                size.requestedWidth + "x" + size.requestedHeight +
+                " requestedPerEye=" + size.requestedPerEyeWidth + "x" +
+                size.requestedHeight + " effectiveTotal=" + size.actualWidth + "x" +
+                size.actualHeight + " effectivePerEye=" + size.actualPerEyeWidth + "x" +
+                size.actualHeight + " contentAspect=" + size.contentAspect +
+                " downscale=" + size.downscale + " clamped=" + size.clamped +
+                " limits width=" + size.widthLimited + " height=" + size.heightLimited +
+                " pixels=" + size.pixelLimited +
+                " userWidthCap=" + vr.maxStereoSourceWidth + " hardLimits=" +
+                QuestVrSettings.SAFE_MAX_SOURCE_WIDTH + "x" +
+                QuestVrSettings.SAFE_MAX_SOURCE_HEIGHT + "/" +
+                QuestVrSettings.SAFE_MAX_SOURCE_PIXELS + "px");
+        if (size.widthLimited) {
+            QuestVrDiagnostics.warn(TAG, "Quest VR resolution plateau reached: this and " +
+                    "larger presets with the same content aspect resolve to effectiveTotal=" +
+                    size.actualWidth + "x" + size.actualHeight + " effectivePerEye=" +
+                    size.actualPerEyeWidth + "x" + size.actualHeight +
+                    " at the current source-width cap");
+        }
+        return new int[] {size.actualWidth, size.actualHeight};
     }
 
     @Override
@@ -600,6 +650,7 @@ public class GameActivity extends AppCompatActivity implements PromptConfirmList
     {
         super.onResume();
         Log.i(TAG, "onResume");
+        logQuestVrLifecycle("onResume focus=" + hasWindowFocus());
 
         if (mSensorController != null) {
             mSensorController.onResume();
@@ -626,6 +677,7 @@ public class GameActivity extends AppCompatActivity implements PromptConfirmList
     public void onPause() {
         super.onPause();
         Log.i(TAG, "onPause");
+        logQuestVrLifecycle("onPause focus=" + hasWindowFocus());
     }
 
     @Override
@@ -644,9 +696,16 @@ public class GameActivity extends AppCompatActivity implements PromptConfirmList
 
         Log.i( TAG, "onStop" );
 
+        final boolean transientQuestVrStop =
+                QuestVrBridge.shouldRetainRenderThreadOnSurfaceLoss() &&
+                !QuestVrBridge.isExitRequested() && !isFinishing() && !isDestroyed();
+        logQuestVrLifecycle("onStop changingConfigurations=" + isChangingConfigurations() +
+                " finishing=" + isFinishing() + " destroyed=" + isDestroyed() +
+                " transientQuestVrStop=" + transientQuestVrStop);
+
         //Don't pause emulation when rotating the screen or the core fragment has been set to null
         //on a shutdown
-        if(!this.isChangingConfigurations() && mCoreFragment != null)
+        if(!transientQuestVrStop && !this.isChangingConfigurations() && mCoreFragment != null)
         {
             if(mGlobalPrefs.maxAutoSaves != 0)
             {
@@ -654,6 +713,9 @@ public class GameActivity extends AppCompatActivity implements PromptConfirmList
             }
 
             mCoreFragment.pauseEmulator();
+        } else if (transientQuestVrStop) {
+            QuestVrDiagnostics.info(TAG,
+                    "Keeping emulator producer running during transient OpenXR Activity stop");
         }
 
         if (mSensorController != null) {
@@ -668,6 +730,8 @@ public class GameActivity extends AppCompatActivity implements PromptConfirmList
     public void onDestroy()
     {
         Log.i( TAG, "onDestroy" );
+        logQuestVrLifecycle("onDestroy entry finishing=" + isFinishing() +
+                " destroyed=" + isDestroyed());
 
         super.onDestroy();
 
@@ -687,9 +751,18 @@ public class GameActivity extends AppCompatActivity implements PromptConfirmList
     {
         // Only try to run; don't try to pause. User may just be touching the in-game menu.
         Log.i( TAG, "onWindowFocusChanged: " + hasFocus );
+        logQuestVrLifecycle("onWindowFocusChanged hasFocus=" + hasFocus);
         if( hasFocus )
         {
             hideSystemBars();
+        }
+    }
+
+    private void logQuestVrLifecycle(String message)
+    {
+        if (mQuestVrDiagnosticSession ||
+                QuestVrBridge.shouldRetainRenderThreadOnSurfaceLoss()) {
+            QuestVrDiagnostics.info(TAG, message);
         }
     }
 

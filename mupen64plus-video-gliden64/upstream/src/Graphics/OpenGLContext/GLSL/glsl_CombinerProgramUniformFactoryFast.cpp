@@ -5,6 +5,7 @@
 #include <DisplayWindow.h>
 #include <Debugger.h>
 #include <FrameBuffer.h>
+#include <QuestVr.h>
 
 #include <cmath>
 
@@ -196,11 +197,13 @@ public:
 		LocateUniform(uCacheOffset[1]);
 		LocateUniform(uTexScale);
 		LocateUniform(uCacheFrameBuffer);
+		LocateUniform(uQuestVrPackedTexture);
 	}
 
 	void update(bool _force) override
 	{
 		int nFB[2] = { 0, 0 };
+		int packedTexture[2] = { 0, 0 };
 		TextureCache & cache = textureCache();
 		for (u32 t = 0; t < 2; ++t) {
 			if (!m_useTile[t])
@@ -237,10 +240,13 @@ public:
 				uCacheScale[t].set(_pTexture->scaleS, _pTexture->scaleT, _force);
 				uCacheOffset[t].set(_pTexture->offsetS, _pTexture->offsetT, _force);
 				nFB[t] = _pTexture->frameBufferTexture;
+				packedTexture[t] = QuestVr::isPackedFramebufferTexture(
+					static_cast<u32>(_pTexture->name)) ? 1 : 0;
 			}
 		}
 
 		uCacheFrameBuffer.set(nFB[0], nFB[1], _force);
+		uQuestVrPackedTexture.set(packedTexture[0], packedTexture[1], _force);
 		uTexScale.set(gSP.texture.scales, gSP.texture.scalet, _force);
 	}
 
@@ -252,6 +258,7 @@ private:
 	fv2Uniform uCacheOffset[2];
 	fv2Uniform uTexScale;
 	iv2Uniform uCacheFrameBuffer;
+	iv2Uniform uQuestVrPackedTexture;
 };
 
 class UClampWrapMirrorTex : public UniformGroup

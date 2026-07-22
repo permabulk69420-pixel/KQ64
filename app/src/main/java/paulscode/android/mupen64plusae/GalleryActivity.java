@@ -43,6 +43,7 @@ import android.view.PointerIcon;
 import android.view.View;
 import android.view.WindowManager;
 import android.view.inputmethod.InputMethodManager;
+import android.widget.Toast;
 
 import androidx.activity.OnBackPressedCallback;
 import androidx.activity.result.ActivityResultLauncher;
@@ -1041,7 +1042,9 @@ public class GalleryActivity extends AppCompatActivity implements GameSidebarAct
         mDrawerLayout.openDrawer(GravityCompat.START);
 
         mGameSidebar.requestFocus();
-        mGameSidebar.setSelection(0);
+        // Position zero is the disabled cover-art header. Select the first actual menu group so
+        // Quest/Android-TV controller confirmation activates Resume instead of the inert header.
+        mGameSidebar.setSelectedGroup(0);
     }
 
     public boolean onGalleryItemLongClick( GalleryItem item )
@@ -1257,7 +1260,11 @@ public class GalleryActivity extends AppCompatActivity implements GameSidebarAct
         intent.putExtra( ActivityHelper.Keys.DO_RESTART, doRestart );
         intent.putExtra( ActivityHelper.Keys.NETPLAY_ENABLED, isNetplayEnabled );
         intent.putExtra( ActivityHelper.Keys.NETPLAY_SERVER, isNetplayServer );
-        mLaunchGame.launch(intent);
+        QuestVrProcessResetReceiver.prepareForQuestLaunch(this, mHandler,
+                () -> mLaunchGame.launch(intent),
+                () -> Toast.makeText(this,
+                        "Previous game is still closing. Try Run again.",
+                        Toast.LENGTH_LONG).show());
     }
 
     @Override

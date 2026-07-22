@@ -274,6 +274,8 @@ namespace graphics {
 		{
 			DrawModeParam mode;
 			bool texrect = true;
+			bool questVrScreenSpace = false;
+			bool questVrSourceTexturePacked = false;
 			u32 verticesCount = 0;
 			RectVertex * vertices = nullptr;
 			const CombinerProgram * combiner = nullptr;

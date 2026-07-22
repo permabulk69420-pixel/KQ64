@@ -45,6 +45,20 @@ bool UnbufferedDrawer::_updateAttribPointer(u32 _index, const void * _ptr)
 
 void UnbufferedDrawer::drawTriangles(const graphics::Context::DrawTriangleParameters & _params)
 {
+	u32 modifiedPositionVertices = 0;
+	for (u32 index = 0; index < _params.verticesCount; ++index) {
+		if ((_params.vertices[index].modify & 0xFFU) != 0)
+			++modifiedPositionVertices;
+	}
+	QuestVr::noteGeometryVertices(_params.verticesCount, modifiedPositionVertices);
+	// drawScreenSpaceTriangle marks every vertex as already positioned in screen space. Duplicate
+	// those draws into both eye viewports, but do not apply the headset/world transform to them.
+	const bool screenSpaceGeometry =
+		modifiedPositionVertices == _params.verticesCount;
+	const bool transformGeometry = !screenSpaceGeometry;
+	if (screenSpaceGeometry)
+		QuestVr::noteScreenSpaceBatch(_params.verticesCount);
+
 	{
 		m_cachedAttribArray->enableVertexAttribArray(triangleAttrib::position, true);
 		const void * ptr = &_params.vertices->x;
@@ -124,7 +138,9 @@ void UnbufferedDrawer::drawTriangles(const graphics::Context::DrawTriangleParame
 		}
 	};
 
-	QuestVr::DrawScope stereoDraw(true);
+	QuestVr::DrawScope stereoDraw(QuestVr::DrawScope::PrimitiveClass::Triangles,
+		transformGeometry, screenSpaceGeometry, false, _params.verticesCount,
+		modifiedPositionVertices);
 	for (u32 eye = 0; eye < stereoDraw.eyeCount(); ++eye) {
 		stereoDraw.selectEye(eye);
 		draw();
@@ -170,7 +186,9 @@ void UnbufferedDrawer::drawRects(const graphics::Context::DrawRectParameters & _
 	if (m_useCoverage)
 		m_cachedAttribArray->enableVertexAttribArray(triangleAttrib::barycoords, false);
 
-	QuestVr::DrawScope stereoDraw(false);
+	QuestVr::DrawScope stereoDraw(QuestVr::DrawScope::PrimitiveClass::Rectangles,
+		false, _params.questVrScreenSpace, _params.questVrSourceTexturePacked,
+		_params.verticesCount);
 	for (u32 eye = 0; eye < stereoDraw.eyeCount(); ++eye) {
 		stereoDraw.selectEye(eye);
 		glDrawArrays(GLenum(_params.mode), 0, _params.verticesCount);
@@ -179,6 +197,13 @@ void UnbufferedDrawer::drawRects(const graphics::Context::DrawRectParameters & _
 
 void UnbufferedDrawer::drawLine(f32 _width, SPVertex * _vertices)
 {
+	u32 modifiedPositionVertices = 0;
+	for (u32 index = 0; index < 2; ++index) {
+		if ((_vertices[index].modify & 0xFFU) != 0)
+			++modifiedPositionVertices;
+	}
+	QuestVr::noteGeometryVertices(2, modifiedPositionVertices);
+
 	{
 		m_cachedAttribArray->enableVertexAttribArray(triangleAttrib::position, true);
 		const void * ptr = &_vertices->x;
@@ -206,7 +231,8 @@ void UnbufferedDrawer::drawLine(f32 _width, SPVertex * _vertices)
 	m_cachedAttribArray->enableVertexAttribArray(rectAttrib::texcoord1, false);
 
 	glLineWidth(_width);
-	QuestVr::DrawScope stereoDraw(true);
+	QuestVr::DrawScope stereoDraw(QuestVr::DrawScope::PrimitiveClass::Lines,
+		true, false, false, 2, modifiedPositionVertices);
 	for (u32 eye = 0; eye < stereoDraw.eyeCount(); ++eye) {
 		stereoDraw.selectEye(eye);
 		glDrawArrays(GL_LINES, 0, 2);

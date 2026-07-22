@@ -10,6 +10,7 @@ import android.util.Log;
 import java.nio.ByteBuffer;
 import java.util.ArrayList;
 
+import paulscode.android.mupen64plusae.questvr.QuestVrDiagnostics;
 import paulscode.android.mupen64plusae.util.PixelBuffer;
 
 public class ShaderDrawer {
@@ -20,6 +21,12 @@ public class ShaderDrawer {
     private final ArrayList<ArrayList<Shader>> mShaderPasses = new ArrayList<>();
     private int mWidth = 0;
     private int mHeight = 0;
+    private final float[] mSurfaceTransformMatrix = {
+            1.0f, 0.0f, 0.0f, 0.0f,
+            0.0f, 1.0f, 0.0f, 0.0f,
+            0.0f, 0.0f, 1.0f, 0.0f,
+            0.0f, 0.0f, 0.0f, 1.0f
+    };
 
     public ShaderDrawer(Context context, ArrayList<ShaderLoader> selectedShaders) {
         ShaderLoader.loadShaders(context);
@@ -46,6 +53,8 @@ public class ShaderDrawer {
 
     public void onSurfaceTextureAvailable(PixelBuffer.SurfaceTextureWithSize surface, int width, int height) {
         Log.i(TAG, "onSurfaceTextureAvailable");
+        QuestVrDiagnostics.info(TAG, "SurfaceTexture consumer attach requested size=" + width +
+                "x" + height + " producer=" + surface.mWidth + "x" + surface.mHeight);
 
         if (mGameTexture == null) {
             Log.i(TAG, "Texture available, surface_final=" + width + "x" + height +
@@ -69,17 +78,23 @@ public class ShaderDrawer {
             try {
                 mGameTexture.attachToGLContext(texture);
             } catch (RuntimeException e) {
+                QuestVrDiagnostics.error(TAG,
+                        "SurfaceTexture.attachToGLContext failed texture=" + texture, e);
+                GLES20.glDeleteTextures(1, textures, 0);
                 mGameTexture = null;
                 mGameTextureId = 0;
                 return;
             }
+            QuestVrDiagnostics.info(TAG, "SurfaceTexture attached to external texture=" +
+                    texture + " glError=0x" + Integer.toHexString(GLES20.glGetError()));
 
             // For some reason this is needed, otherwise frame callbacks stop happening on orientation
             // changes or if the app is put on the background then foreground again
             try {
                 mGameTexture.updateTexImage();
+                mGameTexture.getTransformMatrix(mSurfaceTransformMatrix);
             } catch (RuntimeException e) {
-                e.printStackTrace();
+                QuestVrDiagnostics.error(TAG, "Initial SurfaceTexture.updateTexImage failed", e);
             }
 
             Shader.TexturePassResult prevResult = new Shader.TexturePassResult(texture, surface.mWidth, surface.mHeight,
@@ -121,6 +136,7 @@ public class ShaderDrawer {
 
     public void onSurfaceTextureDestroyed() {
         Log.i(TAG, "onSurfaceTextureDestroyed");
+        QuestVrDiagnostics.info(TAG, "SurfaceTexture consumer destroy texture=" + mGameTextureId);
 
         if (mGameTexture != null) {
             Log.i(TAG, "Dettaching texture");
@@ -128,8 +144,10 @@ public class ShaderDrawer {
             try {
                 mGameTexture.detachFromGLContext();
             } catch (RuntimeException e) {
-                e.printStackTrace();
+                QuestVrDiagnostics.error(TAG, "SurfaceTexture.detachFromGLContext failed", e);
             }
+            final int[] textures = {mGameTextureId};
+            GLES20.glDeleteTextures(1, textures, 0);
             mGameTexture = null;
             mGameTextureId = 0;
         }
@@ -144,12 +162,22 @@ public class ShaderDrawer {
         if (mGameTexture != null) {
             try {
                 mGameTexture.updateTexImage();
+                mGameTexture.getTransformMatrix(mSurfaceTransformMatrix);
                 return mGameTexture.getTimestamp();
             } catch (RuntimeException e) {
-                e.printStackTrace();
+                QuestVrDiagnostics.error(TAG, "SurfaceTexture.updateTexImage failed", e);
             }
         }
         return 0;
+    }
+
+    /** Copy the crop/flip transform belonging to the most recently latched buffer. */
+    public void copySourceTransformMatrix(float[] destination) {
+        if (destination == null || destination.length < mSurfaceTransformMatrix.length) {
+            throw new IllegalArgumentException("SurfaceTexture matrix destination must have 16 elements");
+        }
+        System.arraycopy(mSurfaceTransformMatrix, 0, destination, 0,
+                mSurfaceTransformMatrix.length);
     }
 
     public Bitmap getScreenShot() {

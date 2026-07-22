@@ -64,6 +64,7 @@ import static android.view.Surface.FRAME_RATE_COMPATIBILITY_DEFAULT;
 
 import paulscode.android.mupen64plusae.R;
 import paulscode.android.mupen64plusae.questvr.QuestVrBridge;
+import paulscode.android.mupen64plusae.questvr.QuestVrDiagnostics;
 import paulscode.android.mupen64plusae.questvr.QuestVrSettings;
 
 /**
@@ -131,6 +132,7 @@ public class GameSurface extends SurfaceView implements SurfaceHolder.Callback
     private ShaderDrawer mShaderDrawer;
     private RenderThread mRenderThread = null;
     private PixelBuffer.SurfaceTextureWithSize mSurfaceTexture = null;
+    private volatile boolean mQuestVrCandidate = false;
     boolean mSurfaceAvailable = false;
     boolean mGlContextStarted = false;
     Context mContext;
@@ -198,6 +200,8 @@ public class GameSurface extends SurfaceView implements SurfaceHolder.Callback
     @Override
     public void surfaceCreated(@NonNull SurfaceHolder holder) {
         Log.i(TAG, "surfaceCreated");
+        logQuestVr("surfaceCreated surface=" + holder.getSurface() +
+                " valid=" + holder.getSurface().isValid());
         mSurfaceAvailable = true;
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
             holder.getSurface().setFrameRate(59.94f, FRAME_RATE_COMPATIBILITY_DEFAULT);
@@ -207,12 +211,15 @@ public class GameSurface extends SurfaceView implements SurfaceHolder.Callback
 
     @Override
     public void surfaceChanged(@NonNull SurfaceHolder holder, int format, int width, int height) {
-
+        logQuestVr("surfaceChanged format=" + format + " size=" + width + "x" + height +
+                " surfaceValid=" + holder.getSurface().isValid());
     }
 
     @Override
     public void surfaceDestroyed(@NonNull SurfaceHolder holder) {
         Log.i(TAG, "surfaceDestroyed");
+        logQuestVr("surfaceDestroyed surface=" + holder.getSurface() +
+                " glStarted=" + mGlContextStarted);
 
         stopGlContext();
         mSurfaceAvailable = false;
@@ -220,6 +227,8 @@ public class GameSurface extends SurfaceView implements SurfaceHolder.Callback
 
     protected void startGlContext() {
         Log.i(TAG, "StartGlContext");
+        logQuestVr("startGlContext surfaceAvailable=" + mSurfaceAvailable +
+                " glStarted=" + mGlContextStarted);
 
         if (mSurfaceAvailable && !mGlContextStarted) {
             mShaderDrawer = new ShaderDrawer(mContext, mSelectedShaders);
@@ -235,6 +244,8 @@ public class GameSurface extends SurfaceView implements SurfaceHolder.Callback
     protected void stopGlContext() {
 
         Log.i(TAG, "stopGlContext");
+        logQuestVr("stopGlContext surfaceAvailable=" + mSurfaceAvailable +
+                " glStarted=" + mGlContextStarted + " renderThread=" + mRenderThread);
 
         if (mRenderThread == null) {
             return;
@@ -302,6 +313,7 @@ public class GameSurface extends SurfaceView implements SurfaceHolder.Callback
                     {
                         final String version = GLES10.glGetString( GLES10.GL_VERSION );
                         Log.i( TAG, "Created GL context " + version );
+                        logQuestVrEglState("createGLContext-success GLES=" + version);
 
                         mIsEGLContextReady = true;
                         return true;
@@ -461,7 +473,29 @@ public class GameSurface extends SurfaceView implements SurfaceHolder.Callback
                 configSpec[index] = EGL14.EGL_NONE;
             }
 
-            if (!EGL14.eglChooseConfig(mEglDisplay, configSpec, 0, configs, 0, 1, num_config, 0) || num_config[0] == 0) {
+            final int[] windowOnlyConfigSpec = configSpec;
+            if (mQuestVrCandidate) {
+                configSpec = new int[windowOnlyConfigSpec.length + 2];
+                System.arraycopy(windowOnlyConfigSpec, 0, configSpec, 0,
+                        windowOnlyConfigSpec.length);
+                int index = windowOnlyConfigSpec.length - 1;
+                configSpec[index++] = EGL14.EGL_SURFACE_TYPE;
+                configSpec[index++] = EGL14.EGL_WINDOW_BIT | EGL14.EGL_PBUFFER_BIT;
+                configSpec[index] = EGL14.EGL_NONE;
+                QuestVrDiagnostics.info(TAG,
+                        "Requesting EGL_WINDOW_BIT | EGL_PBUFFER_BIT for OpenXR context parking");
+            }
+
+            boolean choseConfig = EGL14.eglChooseConfig(mEglDisplay, configSpec, 0,
+                    configs, 0, 1, num_config, 0) && num_config[0] != 0;
+            if (!choseConfig && mQuestVrCandidate) {
+                QuestVrDiagnostics.warn(TAG, "No window+pbuffer EGLConfig; falling back to " +
+                        "window-only config and requiring EGL_KHR_surfaceless_context");
+                configSpec = windowOnlyConfigSpec;
+                choseConfig = EGL14.eglChooseConfig(mEglDisplay, configSpec, 0,
+                        configs, 0, 1, num_config, 0) && num_config[0] != 0;
+            }
+            if (!choseConfig) {
                 Log.e("GameSurface", "No EGL config available");
                 return false;
             }
@@ -499,6 +533,21 @@ public class GameSurface extends SurfaceView implements SurfaceHolder.Callback
             }
 
             mEglConfig = config;
+            if (mQuestVrCandidate) {
+                final int[] configId = new int[1];
+                final int[] surfaceType = new int[1];
+                final int[] renderableType = new int[1];
+                EGL14.eglGetConfigAttrib(mEglDisplay, mEglConfig, EGL14.EGL_CONFIG_ID,
+                        configId, 0);
+                EGL14.eglGetConfigAttrib(mEglDisplay, mEglConfig, EGL14.EGL_SURFACE_TYPE,
+                        surfaceType, 0);
+                EGL14.eglGetConfigAttrib(mEglDisplay, mEglConfig, EGL14.EGL_RENDERABLE_TYPE,
+                        renderableType, 0);
+                QuestVrDiagnostics.info(TAG, "Selected EGLConfig id=" + configId[0] +
+                        " surfaceType=0x" + Integer.toHexString(surfaceType[0]) +
+                        " renderableType=0x" + Integer.toHexString(renderableType[0]) +
+                        " pbuffer=" + ((surfaceType[0] & EGL14.EGL_PBUFFER_BIT) != 0));
+            }
         }
         else
             Log.v( TAG, EGL_CHOOSE_CONFIG_NOCHANGE );
@@ -720,6 +769,10 @@ public class GameSurface extends SurfaceView implements SurfaceHolder.Callback
         private static final int mFpsRecalPeriodFrames = 30;
         private boolean mQuestVrActive = false;
         private QuestVrSettings.Configuration mQuestVrConfiguration;
+        private long mProducerCallbackCount = 0;
+        private long mNewLatchedFrameCount = 0;
+        private long mLastTextureTimestamp = 0;
+        private final float[] mSourceTransformMatrix = new float[16];
 
         /**
          * Constructor.
@@ -733,6 +786,7 @@ public class GameSurface extends SurfaceView implements SurfaceHolder.Callback
         @Override
         public void run() {
             Looper.prepare();
+            logQuestVr("RenderThread.run entry");
 
             // We need to create the Handler before reporting ready.
             mHandler = new RenderHandler(this);
@@ -742,8 +796,20 @@ public class GameSurface extends SurfaceView implements SurfaceHolder.Callback
             }
 
             mQuestVrConfiguration = QuestVrSettings.load(mContext);
-            final boolean questVrCandidate = mContext instanceof Activity &&
-                    mQuestVrConfiguration.enabled && QuestVrBridge.isDeviceCapable(mContext);
+            final boolean activityContext = mContext instanceof Activity;
+            final boolean nativeLibraryLoaded = QuestVrBridge.isNativeLibraryLoaded();
+            final boolean headTrackingFeature = QuestVrBridge.hasHeadTrackingFeature(mContext);
+            // The PackageManager feature is diagnostic only. The actual OpenXR loader/runtime
+            // calls decide availability, and initialize() restores flat presentation on failure.
+            final boolean questVrCandidate = activityContext && mQuestVrConfiguration.enabled &&
+                    nativeLibraryLoaded;
+            mQuestVrCandidate = questVrCandidate;
+            QuestVrDiagnostics.info(TAG, "RenderThread startup gate vrEnabled=" +
+                    mQuestVrConfiguration.enabled + " nativeLibraryLoaded=" +
+                    nativeLibraryLoaded + " headTrackingFeature=" + headTrackingFeature +
+                    " activityContext=" + activityContext +
+                    " finalQuestVrCandidate=" + questVrCandidate +
+                    " requestedGlVersion=" + (questVrCandidate ? 3 : 2));
             final int glVersion = questVrCandidate ? 3 : 2;
             if (createGLContext(glVersion, false)) {
                 startPresentation((Activity) (questVrCandidate ? mContext : null));
@@ -766,17 +832,21 @@ public class GameSurface extends SurfaceView implements SurfaceHolder.Callback
             synchronized (mStartLock) {
                 mReady = false;
             }
+            mQuestVrCandidate = false;
+            logQuestVr("RenderThread.run exit");
         }
 
         private void startPresentation(Activity questActivity) {
             if (questActivity != null) {
+                QuestVrDiagnostics.info(TAG, "startPresentation on render thread");
                 mQuestVrActive = QuestVrBridge.initialize(questActivity);
                 if (mQuestVrActive) {
                     QuestVrBridge.configure(mQuestVrConfiguration);
-                    Log.i(TAG, "OpenXR presentation enabled");
+                    QuestVrDiagnostics.info(TAG, "OpenXR presentation enabled");
                     mHandler.sendQuestVrFrame(0);
                 } else {
-                    Log.w(TAG, "OpenXR unavailable; retaining normal Android presentation");
+                    QuestVrDiagnostics.warn(TAG,
+                            "OpenXR unavailable; retaining normal Android presentation");
                 }
             }
         }
@@ -841,9 +911,21 @@ public class GameSurface extends SurfaceView implements SurfaceHolder.Callback
          * Handles incoming fram
          */
         private void frameAvailable() {
+            ++mProducerCallbackCount;
             if (mQuestVrActive) {
                 final long textureTimestamp = mShaderDrawer.updateSourceTexture();
-                QuestVrBridge.onSourceFrameLatched(textureTimestamp);
+                mShaderDrawer.copySourceTransformMatrix(mSourceTransformMatrix);
+                if (textureTimestamp > 0 && textureTimestamp != mLastTextureTimestamp) {
+                    ++mNewLatchedFrameCount;
+                    mLastTextureTimestamp = textureTimestamp;
+                }
+                if (mProducerCallbackCount <= 10 || mProducerCallbackCount % 300 == 0) {
+                    QuestVrDiagnostics.info(TAG, "GLideN64 SurfaceTexture callback=" +
+                            mProducerCallbackCount + " timestamp=" + textureTimestamp +
+                            " newLatchedFrames=" + mNewLatchedFrameCount +
+                            " externalTexture=" + mShaderDrawer.getSourceTextureId());
+                }
+                QuestVrBridge.onSourceFrameLatched(textureTimestamp, mSourceTransformMatrix);
             } else {
                 mShaderDrawer.onDrawFrame();
                 flipBuffers();
@@ -882,6 +964,9 @@ public class GameSurface extends SurfaceView implements SurfaceHolder.Callback
          * Handles incoming frame
          */
         private void surfaceTextureAvailable(int width, int height, PixelBuffer.SurfaceTextureWithSize surfaceTexture) {
+            logQuestVr("consumer SurfaceTexture available requestedSize=" + width + "x" +
+                    height + " producerSize=" + surfaceTexture.mWidth + "x" +
+                    surfaceTexture.mHeight);
             mFrameAvailableTexture = surfaceTexture.mSurfaceTexture;
             if(!mQuestVrActive && ShaderLoader.needsVsync(mSelectedShaders)) {
                 Choreographer.getInstance().postFrameCallback(this);
@@ -891,9 +976,21 @@ public class GameSurface extends SurfaceView implements SurfaceHolder.Callback
 
             mShaderDrawer.onSurfaceTextureAvailable(surfaceTexture, width, height);
             if (mQuestVrActive) {
+                final boolean stereo = mQuestVrConfiguration.stereoEnabled;
+                final float bufferAspect = surfaceTexture.mHeight > 0
+                        ? surfaceTexture.mWidth / (float) surfaceTexture.mHeight : 4.0f / 3.0f;
+                final float contentAspect = stereo
+                        ? bufferAspect * 0.5f
+                        : bufferAspect;
+                QuestVrDiagnostics.info(TAG, "OpenXR source handoff actualProducer=" +
+                        surfaceTexture.mWidth + "x" + surfaceTexture.mHeight +
+                        " consumerRequest=" + width + "x" + height + " stereo=" + stereo +
+                        " totalAspect=" + bufferAspect + " perEye=" +
+                        (stereo ? surfaceTexture.mWidth / 2 : surfaceTexture.mWidth) + "x" +
+                        surfaceTexture.mHeight + " contentAspect=" + contentAspect);
                 QuestVrBridge.setSourceTexture(mShaderDrawer.getSourceTextureId(),
                         surfaceTexture.mWidth, surfaceTexture.mHeight,
-                        mQuestVrConfiguration.stereoEnabled);
+                        stereo, contentAspect);
             }
 
             // Draw a single frame to prevent a black screen on rotation while game is paused
@@ -906,7 +1003,9 @@ public class GameSurface extends SurfaceView implements SurfaceHolder.Callback
         private void takeScreenshot(RenderHandler.ScreenShotRequest screenShotRequest) {
             Log.i(TAG, "Renderthread -- takeScreenshot: " + screenShotRequest.mFilename);
 
-            Bitmap screenshotMirrored = mShaderDrawer.getScreenShot();
+            Bitmap screenshotMirrored = mQuestVrActive
+                    ? QuestVrBridge.captureSourceFrame()
+                    : mShaderDrawer.getScreenShot();
 
             if (screenshotMirrored == null) {
                 //Something bad happened, don't save the screenshot
@@ -970,15 +1069,35 @@ public class GameSurface extends SurfaceView implements SurfaceHolder.Callback
         }
 
         private void surfaceTextureDestroyed() {
+            logQuestVr("consumer SurfaceTexture destroyed callbacks=" + mProducerCallbackCount +
+                    " newLatchedFrames=" + mNewLatchedFrameCount);
             if (mFrameAvailableTexture != null) {
                 mFrameAvailableTexture.setOnFrameAvailableListener(null);
                 Choreographer.getInstance().removeFrameCallback(this);
             }
             if (mQuestVrActive) {
-                QuestVrBridge.setSourceTexture(0, 0, 0, false);
+                QuestVrBridge.setSourceTexture(0, 0, 0, false, 4.0f / 3.0f);
             }
             mShaderDrawer.onSurfaceTextureDestroyed();
         }
+    }
+
+    private void logQuestVr(String message) {
+        QuestVrDiagnostics.info(TAG, message);
+    }
+
+    private void logQuestVrEglState(String label) {
+        if (!mQuestVrCandidate && !QuestVrBridge.shouldRetainRenderThreadOnSurfaceLoss()) {
+            return;
+        }
+        final EGLDisplay currentDisplay = EGL14.eglGetCurrentDisplay();
+        final EGLContext currentContext = EGL14.eglGetCurrentContext();
+        final EGLSurface currentDraw = EGL14.eglGetCurrentSurface(EGL14.EGL_DRAW);
+        QuestVrDiagnostics.info(TAG, "EGL[" + label + "] display=" + mEglDisplay +
+                " config=" + mEglConfig + " context=" + mEglContext +
+                " surface=" + mEglSurface + " currentDisplay=" + currentDisplay +
+                " currentContext=" + currentContext + " currentDraw=" + currentDraw +
+                " eglError=0x" + Integer.toHexString(EGL14.eglGetError()));
     }
 
     /**

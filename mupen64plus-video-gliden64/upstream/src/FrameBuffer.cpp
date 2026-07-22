@@ -18,6 +18,7 @@
 #include "FrameBufferInfo.h"
 #include "Log.h"
 #include "MemoryStatus.h"
+#include "QuestVr.h"
 
 #include "BufferCopy/ColorBufferToRDRAM.h"
 #include "BufferCopy/DepthBufferToRDRAM.h"
@@ -65,8 +66,11 @@ static
 void _initFrameBufferTexture(u32 _address, u16 _width, u16 _height, f32 _scale, u16 _format, u16 _size, CachedTexture *_pTexture)
 {
 	const FramebufferTextureFormats & fbTexFormats = gfxContext.getFramebufferTextureFormats();
+	const u32 horizontalMultiplier = QuestVr::framebufferWidthMultiplier();
+	const f32 horizontalScale = _scale * static_cast<f32>(horizontalMultiplier);
 
-	_pTexture->width = static_cast<u16>(static_cast<u32>(static_cast<f32>(_width) * _scale));
+	_pTexture->width = static_cast<u16>(static_cast<u32>(
+		static_cast<f32>(_width) * horizontalScale));
 	_pTexture->height = static_cast<u16>(static_cast<u32>(static_cast<f32>(_height) * _scale));
 	_pTexture->format = _format;
 	_pTexture->size = _size;
@@ -81,8 +85,10 @@ void _initFrameBufferTexture(u32 _address, u16 _width, u16 _height, f32 _scale, 
 	_pTexture->mirrorS = 0;
 	_pTexture->mirrorT = 0;
 	_pTexture->textureBytes = _pTexture->width * _pTexture->height;
-	_pTexture->hdRatioS = _scale;
+	_pTexture->hdRatioS = horizontalScale;
 	_pTexture->hdRatioT = _scale;
+	if (horizontalMultiplier > 1U)
+		QuestVr::markPackedFramebufferTexture(static_cast<u32>(_pTexture->name));
 	if (_size > G_IM_SIZ_8b)
 		_pTexture->textureBytes *= fbTexFormats.colorFormatBytes;
 	else
@@ -159,7 +165,7 @@ void FrameBuffer::init(u32 _address, u16 _format, u16 _size, u16 _width, bool _c
 	} else if (config.frameBufferEmulation.nativeResFactor != 0 && config.frameBufferEmulation.enable != 0) {
 		m_scale = static_cast<float>(config.frameBufferEmulation.nativeResFactor);
 	} else {
-		m_scale = std::max(dwnd().getScaleX(), 1.0f);
+		m_scale = QuestVr::framebufferScale(dwnd().getScaleX(), dwnd().getScaleY());
 	}
 	m_cfb = _cfb;
 	m_cleared = false;
@@ -168,6 +174,9 @@ void FrameBuffer::init(u32 _address, u16 _format, u16 _size, u16 _width, bool _c
 
 	const u16 maxHeight = VI_GetMaxBufferHeight(_width);
 	_initTexture(_width, maxHeight, _format, _size, m_pTexture);
+	QuestVr::noteFramebufferAllocation(_width, maxHeight, m_scale,
+		m_pTexture->width, m_pTexture->height,
+		static_cast<unsigned int>(config.frameBufferEmulation.nativeResFactor));
 
 	if (config.video.multisampling != 0) {
 		_setAndAttachTexture(m_FBO, m_pTexture, 0, true);
@@ -384,7 +393,7 @@ CachedTexture * FrameBuffer::_getSubTexture(u32 _t)
 	if (!_initSubTexture(_t))
 		return m_pTexture;
 
-	s32 x0 = static_cast<s32>(m_pTexture->offsetS * m_scale);
+	s32 x0 = static_cast<s32>(m_pTexture->offsetS * m_pTexture->hdRatioS);
 	s32 y0 = static_cast<s32>(m_pTexture->offsetT * m_scale);
 	s32 copyWidth = m_pSubTexture->width;
 	if (x0 + copyWidth > m_pTexture->width)
@@ -496,8 +505,8 @@ CachedTexture * FrameBuffer::getTexture(u32 _t)
 	if (!getDepthTexture && (gSP.textureTile[_t]->clamps == 0 || gSP.textureTile[_t]->clampt == 0))
 		pTexture = _getSubTexture(_t);
 
-	pTexture->scaleS = m_scale / static_cast<f32>(pTexture->width);
-	pTexture->scaleT = m_scale / static_cast<f32>(pTexture->height);
+	pTexture->scaleS = pTexture->hdRatioS / static_cast<f32>(pTexture->width);
+	pTexture->scaleT = pTexture->hdRatioT / static_cast<f32>(pTexture->height);
 
 	pTexture->shiftScaleS = calcShiftScaleS(*gSP.textureTile[_t]);
 	pTexture->shiftScaleT = calcShiftScaleT(*gSP.textureTile[_t]);
@@ -516,8 +525,8 @@ CachedTexture * FrameBuffer::getTextureBG()
 			pTexture = _copyFrameBufferTexture();
 	}
 
-	pTexture->scaleS = m_scale / static_cast<f32>(pTexture->width);
-	pTexture->scaleT = m_scale / static_cast<f32>(pTexture->height);
+	pTexture->scaleS = pTexture->hdRatioS / static_cast<f32>(pTexture->width);
+	pTexture->scaleT = pTexture->hdRatioT / static_cast<f32>(pTexture->height);
 
 	pTexture->shiftScaleS = 1.0f;
 	pTexture->shiftScaleT = 1.0f;
@@ -813,8 +822,12 @@ void FrameBufferList::saveBuffer(u32 _address, u16 _format, u16 _size, u16 _widt
 	}
 
 	const float scaleX = config.frameBufferEmulation.nativeResFactor == 0 ?
-		wnd.getScaleX() :
+		QuestVr::framebufferScale(wnd.getScaleX(), wnd.getScaleY()) :
 		static_cast<float>(config.frameBufferEmulation.nativeResFactor);
+	const float expectedHorizontalScale = scaleX * static_cast<float>(
+		QuestVr::framebufferWidthMultiplier());
+	const u32 expectedPhysicalWidth = static_cast<u32>(
+		static_cast<float>(_width) * expectedHorizontalScale);
 
 	if (m_pCurrent == nullptr || m_pCurrent->m_startAddress != _address || m_pCurrent->m_width != _width)
 		m_pCurrent = findBuffer(_address);
@@ -868,7 +881,8 @@ void FrameBufferList::saveBuffer(u32 _address, u16 _format, u16 _size, u16 _widt
 			}
 		} else if ((m_pCurrent->m_width != _width) ||
 					(m_pCurrent->m_size < _size) ||
-					(m_pCurrent->m_scale != scaleX)) {
+					(m_pCurrent->m_scale != scaleX) ||
+					(m_pCurrent->m_pTexture->width != expectedPhysicalWidth)) {
 			removeBuffer(m_pCurrent->m_startAddress);
 			m_pCurrent = nullptr;
 		} else {
@@ -1077,16 +1091,31 @@ void FrameBufferList::_renderScreenSizeBuffer()
 		pFilteredBuffer = f(postProcessor, pFilteredBuffer);
 	CachedTexture * pBufferTexture = pFilteredBuffer->m_pTexture;
 
-	const u32 wndWidth = wnd.getWidth();
+	const u32 physicalWndWidth = wnd.getWidth();
 	const u32 wndHeight = wnd.getHeight();
-	s32 srcCoord[4] = { 0, 0, static_cast<s32>(wndWidth), static_cast<s32>(wndHeight) };
+	// Packed framebuffer objects use per-eye logical X coordinates. BlitScope
+	// performs the one and only mapping from those coordinates into each physical
+	// SBS half. Passing the packed width here causes it to split an already split
+	// image, cropping and enlarging full-screen menus.
+	const u32 logicalWndWidth = QuestVr::isStereoEnabled()
+		? std::max(1U, physicalWndWidth / 2U) : physicalWndWidth;
+	s32 srcCoord[4] = { 0, 0, static_cast<s32>(logicalWndWidth),
+		static_cast<s32>(wndHeight) };
 
-	const u32 screenWidth = wnd.getScreenWidth();
+	const u32 physicalScreenWidth = wnd.getScreenWidth();
+	// Destination coordinates are logical per-eye coordinates. BlitScope maps
+	// them into the physical left/right halves of the Android SBS surface.
+	const u32 screenWidth = QuestVr::isStereoEnabled()
+		? std::max(1U, physicalScreenWidth / 2U) : physicalScreenWidth;
 	const u32 screenHeight = wnd.getScreenHeight();
 	const u32 wndHeightOffset = wnd.getHeightOffset();
-	const s32 hOffset = (screenWidth - wndWidth) / 2;
-	const s32 vOffset = (screenHeight - wndHeight) / 2 + wndHeightOffset;
-	s32 dstCoord[4] = { hOffset, vOffset, hOffset + static_cast<s32>(wndWidth), vOffset + static_cast<s32>(wndHeight) };
+	const s32 hOffset = (static_cast<s32>(screenWidth) -
+		static_cast<s32>(logicalWndWidth)) / 2;
+	const s32 vOffset = (static_cast<s32>(screenHeight) -
+		static_cast<s32>(wndHeight)) / 2 + static_cast<s32>(wndHeightOffset);
+	s32 dstCoord[4] = { hOffset, vOffset,
+		hOffset + static_cast<s32>(logicalWndWidth),
+		vOffset + static_cast<s32>(wndHeight) };
 
 	gfxContext.bindFramebuffer(bufferTarget::DRAW_FRAMEBUFFER, ObjectHandle::defaultFramebuffer);
 
@@ -1097,7 +1126,7 @@ void FrameBufferList::_renderScreenSizeBuffer()
 	blitParams.srcY0 = srcCoord[3];
 	blitParams.srcX1 = srcCoord[2];
 	blitParams.srcY1 = srcCoord[1];
-	blitParams.srcWidth = wndWidth;
+	blitParams.srcWidth = logicalWndWidth;
 	blitParams.srcHeight = wndHeight;
 	blitParams.dstX0 = dstCoord[0];
 	blitParams.dstY0 = dstCoord[1];
@@ -1105,7 +1134,10 @@ void FrameBufferList::_renderScreenSizeBuffer()
 	blitParams.dstY1 = dstCoord[3];
 	blitParams.dstWidth = screenWidth;
 	blitParams.dstHeight = screenHeight + wndHeightOffset;
-	const bool downscale = blitParams.srcWidth >= blitParams.dstWidth || blitParams.srcHeight >= blitParams.dstHeight;
+	// A same-size packed-to-packed presentation is a direct pixel mapping, not a
+	// downscale. Avoid an unnecessary linear sample that softens native UI edges.
+	const bool downscale = blitParams.srcWidth > blitParams.dstWidth ||
+		blitParams.srcHeight > blitParams.dstHeight;
 	blitParams.filter = downscale || config.generalEmulation.enableHybridFilter > 0 ?
 		textureParameters::FILTER_LINEAR :
 		textureParameters::FILTER_NEAREST; //upscale; hybridFilter disabled
@@ -1114,6 +1146,11 @@ void FrameBufferList::_renderScreenSizeBuffer()
 	blitParams.combiner = downscale ? CombinerInfo::get().getTexrectDownscaleCopyProgram() :
 		CombinerInfo::get().getTexrectUpscaleCopyProgram();
 	blitParams.readBuffer = pFilteredBuffer->m_FBO;
+	QuestVr::noteFinalFramebufferBlit(u32(pFilteredBuffer->m_FBO),
+		u32(pBufferTexture->name), physicalWndWidth, logicalWndWidth, wndHeight,
+		physicalScreenWidth, screenWidth, screenHeight + wndHeightOffset,
+		blitParams.srcX0, blitParams.srcX1, blitParams.dstX0, blitParams.dstX1,
+		u32(blitParams.filter));
 
 	drawer.blitOrCopyTexturedRect(blitParams);
 
@@ -1586,6 +1623,15 @@ void FrameBufferList::renderBuffer()
 	} else {
 		readBuffer = pFilteredBuffer->m_FBO;
 	}
+	// srcCoord is expressed in one-eye coordinates (0..1344 for a 2688-wide
+	// packed texture). Normalizing it by the physical packed width and then
+	// applying the eye selector in the copy shader divides X twice, so each eye
+	// samples only one quarter of the packed image. Keep the coordinate-space
+	// width independent from the texture allocation width.
+	u32 sourceCoordinateWidth = QuestVr::isPackedFramebufferTexture(
+		static_cast<u32>(pBufferTexture->name))
+		? std::max(1U, static_cast<u32>(pBufferTexture->width) / 2U)
+		: static_cast<u32>(pBufferTexture->width);
 
 	m_overscan.activate();
 	gfxContext.clearColorBuffer(0.0f, 0.0f, 0.0f, 0.0f);
@@ -1598,7 +1644,7 @@ void FrameBufferList::renderBuffer()
 	blitParams.srcY0 = srcCoord[1];
 	blitParams.srcX1 = srcCoord[2];
 	blitParams.srcY1 = srcCoord[3];
-	blitParams.srcWidth = pBufferTexture->width;
+	blitParams.srcWidth = sourceCoordinateWidth;
 	blitParams.srcHeight = pBufferTexture->height;
 	blitParams.dstX0 = dstCoord[0];
 	blitParams.dstY0 = dstCoord[1];
@@ -1608,7 +1654,8 @@ void FrameBufferList::renderBuffer()
 	blitParams.dstHeight = m_overscan.getBufferHeight();
 	blitParams.mask = blitMask::COLOR_BUFFER;
 	blitParams.tex[0] = pBufferTexture;
-	const bool downscale = blitParams.srcWidth >= blitParams.dstWidth || blitParams.srcHeight >= blitParams.dstHeight;
+	const bool downscale = blitParams.srcWidth > blitParams.dstWidth ||
+		blitParams.srcHeight > blitParams.dstHeight;
 	blitParams.filter = downscale || config.generalEmulation.enableHybridFilter > 0 ?
 		textureParameters::FILTER_LINEAR :
 		textureParameters::FILTER_NEAREST; //upscale; hybridFilter disabled
@@ -1624,6 +1671,11 @@ void FrameBufferList::renderBuffer()
 	}
 	blitParams.readBuffer = readBuffer;
 	blitParams.invertY = config.frameBufferEmulation.enableOverscan == 0;
+	QuestVr::noteFinalFramebufferBlit(u32(readBuffer), u32(pBufferTexture->name),
+		pBufferTexture->width, sourceCoordinateWidth, pBufferTexture->height,
+		m_overscan.getBufferWidth(), m_overscan.getBufferWidth(),
+		m_overscan.getBufferHeight(), blitParams.srcX0, blitParams.srcX1,
+		blitParams.dstX0, blitParams.dstX1, u32(blitParams.filter));
 
 	drawer.copyTexturedRect(blitParams);
 
@@ -1643,10 +1695,14 @@ void FrameBufferList::renderBuffer()
 			readBuffer = pFilteredBuffer->m_FBO;
 			pBufferTexture = pFilteredBuffer->m_pTexture;
 		}
+		sourceCoordinateWidth = QuestVr::isPackedFramebufferTexture(
+			static_cast<u32>(pBufferTexture->name))
+			? std::max(1U, static_cast<u32>(pBufferTexture->width) / 2U)
+			: static_cast<u32>(pBufferTexture->width);
 
 		blitParams.srcY0 = 0;
 		blitParams.srcY1 = min(static_cast<s32>(srcY1*srcScaleY), static_cast<s32>(pFilteredBuffer->m_pTexture->height));
-		blitParams.srcWidth = pBufferTexture->width;
+		blitParams.srcWidth = sourceCoordinateWidth;
 		blitParams.srcHeight = pBufferTexture->height;
 		blitParams.dstY0 = vOffset + static_cast<s32>(dstY0*dstScaleY);
 		blitParams.dstY1 = vOffset + static_cast<s32>(dstY1*dstScaleY);
@@ -1656,6 +1712,15 @@ void FrameBufferList::renderBuffer()
 		blitParams.tex[1] = pNextBuffer->m_pDepthTexture;
 		blitParams.mask = blitMask::COLOR_BUFFER;
 		blitParams.readBuffer = readBuffer;
+		const bool nextDownscale = blitParams.srcWidth > blitParams.dstWidth ||
+			blitParams.srcHeight > blitParams.dstHeight;
+		blitParams.filter = nextDownscale || config.generalEmulation.enableHybridFilter > 0
+			? textureParameters::FILTER_LINEAR : textureParameters::FILTER_NEAREST;
+		QuestVr::noteFinalFramebufferBlit(u32(readBuffer), u32(pBufferTexture->name),
+			pBufferTexture->width, sourceCoordinateWidth, pBufferTexture->height,
+			m_overscan.getBufferWidth(), m_overscan.getBufferWidth(),
+			m_overscan.getBufferHeight(), blitParams.srcX0, blitParams.srcX1,
+			blitParams.dstX0, blitParams.dstX1, u32(blitParams.filter));
 
 		drawer.copyTexturedRect(blitParams);
 	}

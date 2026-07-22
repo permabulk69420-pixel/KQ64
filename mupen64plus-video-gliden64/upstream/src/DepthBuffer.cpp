@@ -6,6 +6,7 @@
 #include <assert.h>
 #include "Combiner.h"
 #include "FrameBuffer.h"
+#include "QuestVr.h"
 #include "DepthBuffer.h"
 #include "VI.h"
 #include "Config.h"
@@ -54,6 +55,8 @@ void DepthBuffer::_initDepthImageTexture(FrameBuffer * _pBuffer, CachedTexture& 
 	_cachedTexture.mirrorS = 0;
 	_cachedTexture.mirrorT = 0;
 	_cachedTexture.textureBytes = _cachedTexture.width * _cachedTexture.height * fbTexFormat.depthImageFormatBytes;
+	if (QuestVr::isPackedFramebufferTexture(static_cast<u32>(_pBuffer->m_pTexture->name)))
+		QuestVr::markPackedFramebufferTexture(static_cast<u32>(_cachedTexture.name));
 
 	{
 		Context::InitTextureParams params;
@@ -115,12 +118,23 @@ void DepthBuffer::_initDepthBufferTexture(const FrameBuffer * _pBuffer, CachedTe
 		_pTexture->hdRatioT = _pBuffer->m_scale;
 	} else {
 		const u16 maxHeight = VI_GetMaxBufferHeight(static_cast<u16>(VI.width));
+		const u32 horizontalMultiplier = QuestVr::framebufferWidthMultiplier();
 		if (config.frameBufferEmulation.nativeResFactor == 0) {
-			_pTexture->width = static_cast<u16>(dwnd().getWidth());
-			_pTexture->height = static_cast<u16>(static_cast<u32>(static_cast<f32>(maxHeight) * dwnd().getScaleX()));
+			const float renderScale = QuestVr::framebufferScale(
+				dwnd().getScaleX(), dwnd().getScaleY());
+			_pTexture->width = static_cast<u16>(static_cast<float>(VI.width) *
+				renderScale * horizontalMultiplier);
+			_pTexture->height = static_cast<u16>(static_cast<float>(maxHeight) * renderScale);
+			_pTexture->hdRatioS = renderScale * horizontalMultiplier;
+			_pTexture->hdRatioT = renderScale;
 		} else {
-			_pTexture->width = static_cast<u16>(VI.width * config.frameBufferEmulation.nativeResFactor);
+			_pTexture->width = static_cast<u16>(VI.width *
+				config.frameBufferEmulation.nativeResFactor * horizontalMultiplier);
 			_pTexture->height = static_cast<u16>(maxHeight * config.frameBufferEmulation.nativeResFactor);
+			_pTexture->hdRatioS = static_cast<float>(
+				config.frameBufferEmulation.nativeResFactor * horizontalMultiplier);
+			_pTexture->hdRatioT = static_cast<float>(
+				config.frameBufferEmulation.nativeResFactor);
 		}
 		_pTexture->address = gDP.depthImageAddress;
 		_pTexture->clampWidth = static_cast<u16>(VI.width);
@@ -136,6 +150,11 @@ void DepthBuffer::_initDepthBufferTexture(const FrameBuffer * _pBuffer, CachedTe
 	_pTexture->mirrorS = 0;
 	_pTexture->mirrorT = 0;
 	_pTexture->textureBytes = _pTexture->width * _pTexture->height * fbTexFormat.depthFormatBytes;
+	const bool packedSource = _pBuffer != nullptr ?
+		QuestVr::isPackedFramebufferTexture(static_cast<u32>(_pBuffer->m_pTexture->name)) :
+		QuestVr::framebufferWidthMultiplier() > 1U;
+	if (packedSource)
+		QuestVr::markPackedFramebufferTexture(static_cast<u32>(_pTexture->name));
 
 	Context::InitTextureParams initParams;
 	initParams.handle = _pTexture->name;
@@ -170,11 +189,17 @@ void DepthBuffer::_initDepthBufferRenderbuffer(FrameBuffer * _pBuffer)
 		m_depthRenderbufferWidth = _pBuffer->m_pTexture->width;
 		height = _pBuffer->m_pTexture->height;
 	} else {
+		const u32 horizontalMultiplier = QuestVr::framebufferWidthMultiplier();
 		if (config.frameBufferEmulation.nativeResFactor == 0) {
-			m_depthRenderbufferWidth = dwnd().getWidth();
-			height = static_cast<u32>(static_cast<f32>(VI_GetMaxBufferHeight(static_cast<u16>(VI.width))) * dwnd().getScaleX());
+			const float renderScale = QuestVr::framebufferScale(
+				dwnd().getScaleX(), dwnd().getScaleY());
+			m_depthRenderbufferWidth = static_cast<u32>(VI.width * renderScale *
+				horizontalMultiplier);
+			height = static_cast<u32>(static_cast<f32>(
+				VI_GetMaxBufferHeight(static_cast<u16>(VI.width))) * renderScale);
 		} else {
-			m_depthRenderbufferWidth = VI.width * config.frameBufferEmulation.nativeResFactor;
+			m_depthRenderbufferWidth = VI.width *
+				config.frameBufferEmulation.nativeResFactor * horizontalMultiplier;
 			height = VI_GetMaxBufferHeight(static_cast<u16>(VI.width)) * config.frameBufferEmulation.nativeResFactor;
 		}
 	}

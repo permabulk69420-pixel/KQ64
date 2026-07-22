@@ -141,7 +141,9 @@ void BufferedDrawer::drawRects(const graphics::Context::DrawRectParameters & _pa
 	m_cachedAttribArray->enableVertexAttribArray(rectAttrib::texcoord0, _params.texrect);
 	m_cachedAttribArray->enableVertexAttribArray(rectAttrib::texcoord1, _params.texrect);
 
-	QuestVr::DrawScope stereoDraw(false);
+	QuestVr::DrawScope stereoDraw(QuestVr::DrawScope::PrimitiveClass::Rectangles,
+		false, _params.questVrScreenSpace, _params.questVrSourceTexturePacked,
+		_params.verticesCount);
 	for (u32 eye = 0; eye < stereoDraw.eyeCount(); ++eye) {
 		stereoDraw.selectEye(eye);
 		glDrawArrays(GLenum(_params.mode), m_rectsBuffers.vbo.pos - _params.verticesCount, _params.verticesCount);
@@ -203,6 +205,20 @@ void BufferedDrawer::_updateTrianglesBuffers(const graphics::Context::DrawTriang
 
 void BufferedDrawer::drawTriangles(const graphics::Context::DrawTriangleParameters & _params)
 {
+	u32 modifiedPositionVertices = 0;
+	for (u32 index = 0; index < _params.verticesCount; ++index) {
+		if ((_params.vertices[index].modify & 0xFFU) != 0)
+			++modifiedPositionVertices;
+	}
+	QuestVr::noteGeometryVertices(_params.verticesCount, modifiedPositionVertices);
+	// drawScreenSpaceTriangle marks every vertex as already positioned in screen space. Duplicate
+	// those draws into both eye viewports, but do not apply the headset/world transform to them.
+	const bool screenSpaceGeometry =
+		modifiedPositionVertices == _params.verticesCount;
+	const bool transformGeometry = !screenSpaceGeometry;
+	if (screenSpaceGeometry)
+		QuestVr::noteScreenSpaceBatch(_params.verticesCount);
+
 	_updateTrianglesBuffers(_params);
 
 	if (isHWLightingAllowed())
@@ -247,7 +263,9 @@ void BufferedDrawer::drawTriangles(const graphics::Context::DrawTriangleParamete
 		}
 	};
 
-	QuestVr::DrawScope stereoDraw(true);
+	QuestVr::DrawScope stereoDraw(QuestVr::DrawScope::PrimitiveClass::Triangles,
+		transformGeometry, screenSpaceGeometry, false, _params.verticesCount,
+		modifiedPositionVertices);
 	for (u32 eye = 0; eye < stereoDraw.eyeCount(); ++eye) {
 		stereoDraw.selectEye(eye);
 		draw();
@@ -256,6 +274,13 @@ void BufferedDrawer::drawTriangles(const graphics::Context::DrawTriangleParamete
 
 void BufferedDrawer::drawLine(f32 _width, SPVertex * _vertices)
 {
+	u32 modifiedPositionVertices = 0;
+	for (u32 index = 0; index < 2; ++index) {
+		if ((_vertices[index].modify & 0xFFU) != 0)
+			++modifiedPositionVertices;
+	}
+	QuestVr::noteGeometryVertices(2, modifiedPositionVertices);
+
 	const BuffersType type = BuffersType::triangles;
 
 	if (m_type != type) {
@@ -269,7 +294,8 @@ void BufferedDrawer::drawLine(f32 _width, SPVertex * _vertices)
 	_updateBuffer(vboBuffer, 2, vboDataSize, m_vertices.data());
 
 	glLineWidth(_width);
-	QuestVr::DrawScope stereoDraw(true);
+	QuestVr::DrawScope stereoDraw(QuestVr::DrawScope::PrimitiveClass::Lines,
+		true, false, false, 2, modifiedPositionVertices);
 	for (u32 eye = 0; eye < stereoDraw.eyeCount(); ++eye) {
 		stereoDraw.selectEye(eye);
 		glDrawArrays(GL_LINES, m_trisBuffers.vbo.pos - 2, 2);

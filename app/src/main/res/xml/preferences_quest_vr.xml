@@ -8,6 +8,19 @@
             android:key="enabled"
             android:summary="@string/questVrEnabled_summary"
             android:title="@string/questVrEnabled_title" />
+        <androidx.preference.ListPreference
+            android:defaultValue="cinema_screen"
+            android:entries="@array/questVrPresentation_entries"
+            android:entryValues="@array/questVrPresentation_values"
+            android:key="presentation_mode"
+            android:summary="@string/questVrPresentation_summary"
+            android:title="@string/questVrPresentation_title" />
+        <androidx.preference.EditTextPreference
+            android:defaultValue="1.0"
+            android:inputType="numberDecimal"
+            android:key="immersive_view_scale"
+            android:summary="@string/questVrImmersiveScale_summary"
+            android:title="@string/questVrImmersiveScale_title" />
         <androidx.preference.CheckBoxPreference
             android:defaultValue="true"
             android:key="stereo_enabled"
@@ -36,6 +49,18 @@
             android:key="rotation_strength"
             android:summary="@string/questVrRotation_summary"
             android:title="@string/questVrRotation_title" />
+        <androidx.preference.EditTextPreference
+            android:defaultValue="1.0"
+            android:inputType="numberDecimal"
+            android:key="screen_scale"
+            android:summary="@string/questVrScreenScale_summary"
+            android:title="@string/questVrScreenScale_title" />
+        <androidx.preference.EditTextPreference
+            android:defaultValue="2.0"
+            android:inputType="numberDecimal"
+            android:key="screen_distance_meters"
+            android:summary="@string/questVrScreenDistance_summary"
+            android:title="@string/questVrScreenDistance_title" />
     </androidx.preference.PreferenceCategory>
 
     <androidx.preference.PreferenceCategory
@@ -79,13 +104,13 @@
             android:summary="@string/questVrMarioKart_summary"
             android:title="@string/questVrMarioKart_title" />
         <androidx.preference.EditTextPreference
-            android:defaultValue="-0.20"
+            android:defaultValue="0.0"
             android:inputType="numberDecimal|numberSigned"
             android:key="mario_kart_camera_offset_y_meters"
             android:summary="@string/questVrMarioKartY_summary"
             android:title="@string/questVrMarioKartY_title" />
         <androidx.preference.EditTextPreference
-            android:defaultValue="-0.75"
+            android:defaultValue="0.0"
             android:inputType="numberDecimal|numberSigned"
             android:key="mario_kart_camera_offset_z_meters"
             android:summary="@string/questVrMarioKartZ_summary"
@@ -100,13 +125,13 @@
             android:summary="@string/questVrOpenXrFov_summary"
             android:title="@string/questVrOpenXrFov_title" />
         <androidx.preference.EditTextPreference
-            android:defaultValue="1.0"
+            android:defaultValue="2.0"
             android:inputType="numberDecimal"
-            android:key="stereo_source_width_scale"
+            android:key="stereo_source_width_multiplier_v2"
             android:summary="@string/questVrSourceScale_summary"
             android:title="@string/questVrSourceScale_title" />
         <androidx.preference.EditTextPreference
-            android:defaultValue="4096"
+            android:defaultValue="2688"
             android:inputType="number"
             android:key="max_stereo_source_width"
             android:summary="@string/questVrSourceMaximum_summary"
@@ -121,6 +146,16 @@
             android:key="debug_logging"
             android:summary="@string/questVrDebug_summary"
             android:title="@string/questVrDebug_title" />
+        <androidx.preference.CheckBoxPreference
+            android:defaultValue="false"
+            android:key="startup_proof_layers"
+            android:summary="@string/questVrProofLayers_summary"
+            android:title="@string/questVrProofLayers_title" />
+        <androidx.preference.Preference
+            android:key="export_diagnostics"
+            android:persistent="false"
+            android:summary="@string/questVrExport_summary"
+            android:title="@string/questVrExport_title" />
     </androidx.preference.PreferenceCategory>
 
 </androidx.preference.PreferenceScreen>

@@ -11,6 +11,14 @@
     ***********************************************************************************
 -->
 <resources>
+    <string-array name="questVrPresentation_entries" translatable="false">
+        <item>@string/questVrPresentation_immersive</item>
+        <item>@string/questVrPresentation_cinema</item>
+    </string-array>
+    <string-array name="questVrPresentation_values" translatable="false">
+        <item>immersive_projection</item>
+        <item>cinema_screen</item>
+    </string-array>
 
     <!-- Locales -->
     <string-array name="localeOverride_values" translatable="false">
