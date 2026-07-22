@@ -1,167 +1,146 @@
-name: Mupen64Plus-AE
+name: KQ64
 
-on: [push, pull_request]
+on:
+  push:
+    branches:
+      - "**"
+    tags:
+      - "v*"
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
 
 jobs:
   build:
-    name: Build
+    name: Build KQ64
     runs-on: ubuntu-latest
 
     steps:
-    - uses: android-actions/setup-android@v3
-      with:
-        cmdline-tools-version: 9477386
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+        with:
+          cmdline-tools-version: 9477386
 
-    - uses: actions/setup-java@v4
-      with:
-        java-version: 21
-        distribution: 'adopt'
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          java-version: 21
+          distribution: temurin
 
-    - name: Set up environment variables
-      run: |
-        echo "ANDROID_NDK_HOME=$ANDROID_NDK_HOME" >> $GITHUB_ENV
-        echo "ANDROID_SDK_ROOT=$ANDROID_HOME" >> $GITHUB_ENV
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
-    - name: Checkout mupen64plus-ae repo
-      uses: actions/checkout@v4
-      with:
-        fetch-depth: 0
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends file gawk unzip
 
-    - name: Decode debug keystore
-      env:
-        DEBUG_KEYSTORE: ${{ secrets.DEBUG_KEYSTORE }}
-      run: |
-        if [ -z "$DEBUG_KEYSTORE" ]
-        then
-           echo "No debug keystore value"
-        else
-           echo $DEBUG_KEYSTORE > debug.keystore.base64
-           base64 --decode debug.keystore.base64 > debug.keystore
-           sudo cp -f debug.keystore $HOME/.android/.
-        fi
+      - name: Configure persistent signing key
+        env:
+          DEBUG_KEYSTORE: ${{ secrets.DEBUG_KEYSTORE }}
+        run: |
+          if [ -n "$DEBUG_KEYSTORE" ]; then
+            mkdir -p "$HOME/.android"
+            printf '%s' "$DEBUG_KEYSTORE" | base64 --decode > "$HOME/.android/debug.keystore"
+            echo "Using the repository signing key."
+          else
+            echo "::warning::DEBUG_KEYSTORE is not configured. This CI build will use a runner-generated debug key and must not be published as an update."
+          fi
 
-    - name: Install build dependencies
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y --no-install-recommends file gawk unzip
-
-    - name: Validate generated Quest VR shader literals
-      run: |
-        perl -ne '
-          if (/(?<!\\)\\\\n"/) {
-            print "$ARGV: accidental literal \\\\n in generated GLSL: $_";
-            $bad = 1;
-          }
-          END { exit($bad ? 1 : 0); }
-        ' \
-          mupen64plus-video-gliden64/upstream/src/Graphics/OpenGLContext/GLSL/glsl_CombinerProgramBuilderCommon.cpp \
-          mupen64plus-video-gliden64/upstream/src/Graphics/OpenGLContext/GLSL/glsl_CombinerProgramBuilderAccurate.cpp \
-          mupen64plus-video-gliden64/upstream/src/Graphics/OpenGLContext/GLSL/glsl_CombinerProgramBuilderFast.cpp \
-          mupen64plus-video-gliden64/upstream/src/Graphics/OpenGLContext/GLSL/glsl_SpecialShadersFactory.cpp \
-          mupen64plus-video-gliden64/upstream/src/Graphics/OpenGLContext/GLSL/glsl_FXAA.cpp
-
-    - name: Build artifact
-      run: ./gradlew assemble
-
-    - name: Verify Quest arm64 APK contents
-      run: |
-        apk="app/build/outputs/apk/release/Mupen64PlusAE-release.apk"
-        test -f "$apk"
-        unzip -Z1 "$apk" > /tmp/mupen64plus-ae-apk-files.txt
-        for library in \
-          lib/arm64-v8a/libmupen64plus-quest-vr.so \
-          lib/arm64-v8a/libopenxr_loader.so \
-          lib/arm64-v8a/libmupen64plus-video-GLideN64.so
-        do
-          if ! grep -Fxq "$library" /tmp/mupen64plus-ae-apk-files.txt
-          then
-            echo "Missing required Quest arm64 library: $library"
-            grep '^lib/arm64-v8a/' /tmp/mupen64plus-ae-apk-files.txt | sort
+      - name: Require persistent signing for tagged releases
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          DEBUG_KEYSTORE: ${{ secrets.DEBUG_KEYSTORE }}
+        run: |
+          if [ -z "$DEBUG_KEYSTORE" ]; then
+            echo "A tagged release requires the persistent DEBUG_KEYSTORE repository secret."
             exit 1
           fi
-        done
 
-    - name: Declare branch name
-      id: branch-name
-      uses: tj-actions/branch-names@v8
+      - name: Validate generated Quest VR shader literals
+        run: |
+          perl -ne '
+            if (/(?<!\\)\\\\n"/) {
+              print "$ARGV: accidental literal \\\\n in generated GLSL: $_";
+              $bad = 1;
+            }
+            END { exit($bad ? 1 : 0); }
+          ' \
+            mupen64plus-video-gliden64/upstream/src/Graphics/OpenGLContext/GLSL/glsl_CombinerProgramBuilderCommon.cpp \
+            mupen64plus-video-gliden64/upstream/src/Graphics/OpenGLContext/GLSL/glsl_CombinerProgramBuilderAccurate.cpp \
+            mupen64plus-video-gliden64/upstream/src/Graphics/OpenGLContext/GLSL/glsl_CombinerProgramBuilderFast.cpp \
+            mupen64plus-video-gliden64/upstream/src/Graphics/OpenGLContext/GLSL/glsl_SpecialShadersFactory.cpp \
+            mupen64plus-video-gliden64/upstream/src/Graphics/OpenGLContext/GLSL/glsl_FXAA.cpp
 
-    - name: Get branch name
-      id: var
-      run: |
-        echo "branch=${{ steps.branch-name.outputs.current_branch }}" >> $GITHUB_OUTPUT
+      - name: Build release APK
+        run: ./gradlew assembleRelease
 
-    - name: Declare sha name
-      uses: benjlevesque/short-sha@v3.0
-      id: short-sha
-      with:
-        length: 7
+      - name: Verify Quest arm64 APK contents
+        run: |
+          apk="app/build/outputs/apk/release/KQ64-release.apk"
+          test -f "$apk"
+          unzip -Z1 "$apk" > /tmp/kq64-apk-files.txt
+          for library in \
+            lib/arm64-v8a/libmupen64plus-quest-vr.so \
+            lib/arm64-v8a/libopenxr_loader.so \
+            lib/arm64-v8a/libmupen64plus-video-GLideN64.so
+          do
+            if ! grep -Fxq "$library" /tmp/kq64-apk-files.txt; then
+              echo "Missing required Quest arm64 library: $library"
+              grep '^lib/arm64-v8a/' /tmp/kq64-apk-files.txt | sort
+              exit 1
+            fi
+          done
 
-    - name: Get sha name
-      run: |
-        echo $SHA
-      env:
-        SHA: ${{ steps.short-sha.outputs.sha }}
+      - name: Write APK checksum
+        run: |
+          cd app/build/outputs/apk/release
+          sha256sum KQ64-release.apk > KQ64-release.apk.sha256
 
-    - name: Upload artifact
-      uses: actions/upload-artifact@v4
-      with:
-        name: mupen64plus-ae-${{ steps.var.outputs.branch }}-${{ env.SHA }}
-        path: ${{ github.workspace }}/app/build/outputs/apk/release/Mupen64PlusAE-release.apk
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: KQ64-${{ github.sha }}
+          path: |
+            app/build/outputs/apk/release/KQ64-release.apk
+            app/build/outputs/apk/release/KQ64-release.apk.sha256
+          if-no-files-found: error
+          retention-days: 30
 
   release:
-    name: Release
+    name: Publish GitHub release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
     runs-on: ubuntu-latest
-    needs: [build]
-    if: github.ref == 'refs/heads/master'
+    permissions:
+      contents: write
 
     steps:
-    - name: Checkout mupen64plus-ae repo
-      uses: actions/checkout@v4
-      with:
-        fetch-depth: 0
+      - name: Check out repository
+        uses: actions/checkout@v4
 
-    - name: Download Artifacts
-      uses: actions/download-artifact@v4
-      with:
-        path: dist
+      - name: Download built APK
+        uses: actions/download-artifact@v4
+        with:
+          name: KQ64-${{ github.sha }}
+          path: dist
 
-    - name: Declare branch name
-      id: branch-name
-      uses: tj-actions/branch-names@v8
+      - name: Name release files
+        run: |
+          mv dist/KQ64-release.apk "dist/KQ64-${GITHUB_REF_NAME}.apk"
+          mv dist/KQ64-release.apk.sha256 "dist/KQ64-${GITHUB_REF_NAME}.apk.sha256"
+          sed -i "s#KQ64-release.apk#KQ64-${GITHUB_REF_NAME}.apk#g" "dist/KQ64-${GITHUB_REF_NAME}.apk.sha256"
 
-    - name: Get branch name
-      id: var
-      run: |
-        echo "branch=${{ steps.branch-name.outputs.current_branch }}" >> $GITHUB_OUTPUT
-
-    - name: Declare sha name
-      uses: benjlevesque/short-sha@v3.0
-      id: short-sha
-      with:
-        length: 7
-
-    - name: Get sha name
-      run: |
-        echo $SHA
-      env:
-        SHA: ${{ steps.short-sha.outputs.sha }}
-
-    - name: Re-zip artifacts
-      run: |
-        cd dist
-        zip -r mupen64plus-ae-${{ steps.var.outputs.branch }}.zip mupen64plus-ae*
-
-    - name: Update Git Tag
-      run: |
-        git tag -f Pre-release
-        git push -f origin Pre-release
-
-    - name: Create Release
-      uses: ncipollo/release-action@v1
-      with:
-        prerelease: true
-        allowUpdates: true
-        removeArtifacts: true
-        replacesArtifacts: false
-        tag: Pre-release
-        artifacts: "dist/*.zip"
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: KQ64 ${{ github.ref_name }}
+          body_path: RELEASE_NOTES.md
+          prerelease: ${{ contains(github.ref_name, 'alpha') || contains(github.ref_name, 'beta') || contains(github.ref_name, 'rc') }}
+          files: |
+            dist/KQ64-${{ github.ref_name }}.apk
+            dist/KQ64-${{ github.ref_name }}.apk.sha256
