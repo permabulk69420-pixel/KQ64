@@ -3,26 +3,31 @@
     xmlns:tools="http://schemas.android.com/tools"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
+    android:background="@android:color/black"
     android:orientation="vertical"
-    tools:ignore="UseCompoundDrawables" >
-    
+    tools:ignore="UseCompoundDrawables">
+
     <TextView
         android:id="@+id/mainText"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:ems="10"
-        android:gravity="center_vertical"
+        android:gravity="center"
         android:minLines="2"
-        android:paddingLeft="10dp"
-        android:paddingRight="10dp"
-        android:text="@string/assetExtractor_initializing" />
-    
+        android:paddingLeft="16dp"
+        android:paddingTop="12dp"
+        android:paddingRight="16dp"
+        android:text="@string/assetExtractor_initializing"
+        android:textColor="@android:color/white" />
+
     <ImageView
         android:id="@+id/mainImage"
         android:layout_width="match_parent"
         android:layout_height="match_parent"
         android:layout_gravity="center"
         android:contentDescription="@string/app_name"
-        android:src="@drawable/publisherlogo" />
-    
+        android:padding="48dp"
+        android:scaleType="centerInside"
+        android:src="@drawable/kq64_logo" />
+
 </LinearLayout>
