@@ -77,7 +77,18 @@ jobs:
             mupen64plus-video-gliden64/upstream/src/Graphics/OpenGLContext/GLSL/glsl_FXAA.cpp
 
       - name: Build release APK
-        run: ./gradlew assembleRelease
+        run: |
+          set -o pipefail
+          ./gradlew assembleRelease 2>&1 | tee kq64-build.log
+
+      - name: Upload build log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: KQ64-build-log-${{ github.sha }}
+          path: kq64-build.log
+          if-no-files-found: warn
+          retention-days: 7
 
       - name: Verify Quest arm64 APK contents
         run: |
