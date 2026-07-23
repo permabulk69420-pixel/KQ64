@@ -93,6 +93,21 @@ jobs:
               '                MappingView.drawText(canvas, paint, "CONTROLS", BUTTON_RECT.centerX(),',
               1,
           )
+          mapping = mapping.replace(
+              '        private long mNextNavigationTime;\n',
+              '        private long mNextNavigationTime;\n        private long mIgnoreBackUntil;\n',
+              1,
+          )
+          mapping = mapping.replace(
+              '                } else {\n                    bindInput(keyCode);\n                }',
+              '                } else {\n                    bindInput(keyCode);\n                    if (keyCode == KeyEvent.KEYCODE_BUTTON_B) {\n                        mIgnoreBackUntil = SystemClock.uptimeMillis() + 600L;\n                    }\n                }',
+              1,
+          )
+          mapping = mapping.replace(
+              '                case KeyEvent.KEYCODE_BUTTON_B:\n                case KeyEvent.KEYCODE_BACK:\n                case KeyEvent.KEYCODE_ESCAPE:\n                    mDialog.dismiss();\n                    return true;',
+              '                case KeyEvent.KEYCODE_BUTTON_B:\n                    mDialog.dismiss();\n                    return true;\n                case KeyEvent.KEYCODE_BACK:\n                    if (SystemClock.uptimeMillis() < mIgnoreBackUntil) {\n                        return true;\n                    }\n                    mDialog.dismiss();\n                    return true;\n                case KeyEvent.KEYCODE_ESCAPE:\n                    mDialog.dismiss();\n                    return true;',
+              1,
+          )
           mapping_path.write_text(mapping, encoding="utf-8")
 
           launcher_path = Path("app/src/main/java/paulscode/android/mupen64plusae/QuestVrLauncherActivity.java")
@@ -100,7 +115,7 @@ jobs:
           replacements = [
               ('    private static final int ACTION_ADVANCED = 2;\n', '    private static final int ACTION_ADVANCED = 2;\n    private static final int ACTION_CONTROLS = 3;\n'),
               ('                        mSelectedAction = wrap(mSelectedAction + direction, 3);', '                        mSelectedAction = wrap(mSelectedAction + direction, 4);'),
-              ('                } else if (x >= 970.0f && x <= 1315.0f) {\n                    mSelectedAction = ACTION_ADVANCED;\n                    action = ACTION_ADVANCED;\n                }', '                } else if (x >= 970.0f && x < 1310.0f) {\n                    mSelectedAction = ACTION_ADVANCED;\n                    action = ACTION_ADVANCED;\n                } else if (x >= 1310.0f && x <= 1540.0f) {\n                    mSelectedAction = ACTION_CONTROLS;\n                    action = ACTION_CONTROLS;\n                }'),
+              ('                } else if (x >= 970.0f && x <= 1315.0f) {\n                    mSelectedAction = ACTION_ADVANCED;\n                    action = ACTION_ADVANCED;\n                }', '                } else if (x >= 120.0f && x <= 445.0f) {\n                    mSelectedAction = ACTION_LAUNCH;\n                    action = ACTION_LAUNCH;\n                } else if (x >= 470.0f && x <= 795.0f) {\n                    mSelectedAction = ACTION_IMPORT;\n                    action = ACTION_IMPORT;\n                } else if (x >= 820.0f && x <= 1145.0f) {\n                    mSelectedAction = ACTION_ADVANCED;\n                    action = ACTION_ADVANCED;\n                } else if (x >= 1170.0f && x <= 1495.0f) {\n                    mSelectedAction = ACTION_CONTROLS;\n                    action = ACTION_CONTROLS;\n                }'),
               ('        } else if (action == ACTION_ADVANCED) {\n            startActivity(new Intent(this, GalleryActivity.class));\n            finish();\n            overridePendingTransition(0, 0);\n        }', '        } else if (action == ACTION_ADVANCED) {\n            startActivity(new Intent(this, GalleryActivity.class));\n            finish();\n            overridePendingTransition(0, 0);\n        } else if (action == ACTION_CONTROLS) {\n            Kq64ControllerMapping.show(this);\n        }'),
               ('        drawButton(canvas, paint, new RectF(305, 710, 615, 790), launch,\n                action == ACTION_LAUNCH, focused, !scanning);\n        drawButton(canvas, paint, new RectF(645, 710, 955, 790), "IMPORT GAMES",\n                action == ACTION_IMPORT, focused, !scanning);\n        drawButton(canvas, paint, new RectF(985, 710, 1295, 790), "ADVANCED / LEGACY",\n                action == ACTION_ADVANCED, focused, !scanning);', '        drawButton(canvas, paint, new RectF(120, 710, 445, 790), launch,\n                action == ACTION_LAUNCH, focused, !scanning);\n        drawButton(canvas, paint, new RectF(470, 710, 795, 790), "IMPORT GAMES",\n                action == ACTION_IMPORT, focused, !scanning);\n        drawButton(canvas, paint, new RectF(820, 710, 1145, 790), "ADVANCED / LEGACY",\n                action == ACTION_ADVANCED, focused, !scanning);\n        drawButton(canvas, paint, new RectF(1170, 710, 1495, 790), "CONTROLS",\n                action == ACTION_CONTROLS, focused, !scanning);'),
           ]
@@ -110,7 +125,7 @@ jobs:
               launcher = launcher.replace(old, new, 1)
           launcher = launcher.replace('        Kq64ControllerMapping.installLauncherButton(this);\n', '', 1)
           launcher_path.write_text(launcher, encoding="utf-8")
-          print("Integrated Controls as launcher action 4 and removed overlay installation.")
+          print("Integrated Controls with aligned hitboxes and protected Quest B capture.")
           PY
 
       - name: Upload corrected controller source
