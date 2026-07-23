@@ -2,7 +2,7 @@
 <resources>
 
     <!-- Proper names, trademarks, etc. -->
-    <string name="app_name" translatable="false">KQ64</string>
+    <string name="app_name" translatable="false">KQ-64</string>
 
     <!-- Web links, email addresses, etc. -->
     <string name="uri_forum" translatable="false">https://github.com/permabulk69420-pixel/mupen64plus-ae/discussions</string>
