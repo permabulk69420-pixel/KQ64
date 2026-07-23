@@ -76,30 +76,50 @@ jobs:
             mupen64plus-video-gliden64/upstream/src/Graphics/OpenGLContext/GLSL/glsl_SpecialShadersFactory.cpp \
             mupen64plus-video-gliden64/upstream/src/Graphics/OpenGLContext/GLSL/glsl_FXAA.cpp
 
-      - name: Apply controller mapper compile fix
+      - name: Integrate Controls into native Quest launcher
         run: |
           python3 - <<'PY'
           from pathlib import Path
 
-          path = Path("app/src/main/java/paulscode/android/mupen64plusae/Kq64ControllerMapping.java")
-          text = path.read_text(encoding="utf-8")
-          old = '                drawText(canvas, paint, "CONTROLS", BUTTON_RECT.centerX(),'
-          new = '                MappingView.drawText(canvas, paint, "CONTROLS", BUTTON_RECT.centerX(),'
-          if old in text:
-              text = text.replace(old, new, 1)
-              path.write_text(text, encoding="utf-8")
-              print("Applied MappingView.drawText compile fix.")
-          elif new in text:
-              print("Controller mapper compile fix is already present.")
-          else:
-              raise SystemExit("Expected Controls drawText call was not found")
+          mapping_path = Path("app/src/main/java/paulscode/android/mupen64plusae/Kq64ControllerMapping.java")
+          mapping = mapping_path.read_text(encoding="utf-8")
+          mapping = mapping.replace(
+              '    private static void show(@NonNull Activity activity) {',
+              '    static void show(@NonNull Activity activity) {',
+              1,
+          )
+          mapping = mapping.replace(
+              '                drawText(canvas, paint, "CONTROLS", BUTTON_RECT.centerX(),',
+              '                MappingView.drawText(canvas, paint, "CONTROLS", BUTTON_RECT.centerX(),',
+              1,
+          )
+          mapping_path.write_text(mapping, encoding="utf-8")
+
+          launcher_path = Path("app/src/main/java/paulscode/android/mupen64plusae/QuestVrLauncherActivity.java")
+          launcher = launcher_path.read_text(encoding="utf-8")
+          replacements = [
+              ('    private static final int ACTION_ADVANCED = 2;\n', '    private static final int ACTION_ADVANCED = 2;\n    private static final int ACTION_CONTROLS = 3;\n'),
+              ('                        mSelectedAction = wrap(mSelectedAction + direction, 3);', '                        mSelectedAction = wrap(mSelectedAction + direction, 4);'),
+              ('                } else if (x >= 970.0f && x <= 1315.0f) {\n                    mSelectedAction = ACTION_ADVANCED;\n                    action = ACTION_ADVANCED;\n                }', '                } else if (x >= 970.0f && x < 1310.0f) {\n                    mSelectedAction = ACTION_ADVANCED;\n                    action = ACTION_ADVANCED;\n                } else if (x >= 1310.0f && x <= 1540.0f) {\n                    mSelectedAction = ACTION_CONTROLS;\n                    action = ACTION_CONTROLS;\n                }'),
+              ('        } else if (action == ACTION_ADVANCED) {\n            startActivity(new Intent(this, GalleryActivity.class));\n            finish();\n            overridePendingTransition(0, 0);\n        }', '        } else if (action == ACTION_ADVANCED) {\n            startActivity(new Intent(this, GalleryActivity.class));\n            finish();\n            overridePendingTransition(0, 0);\n        } else if (action == ACTION_CONTROLS) {\n            Kq64ControllerMapping.show(this);\n        }'),
+              ('        drawButton(canvas, paint, new RectF(305, 710, 615, 790), launch,\n                action == ACTION_LAUNCH, focused, !scanning);\n        drawButton(canvas, paint, new RectF(645, 710, 955, 790), "IMPORT GAMES",\n                action == ACTION_IMPORT, focused, !scanning);\n        drawButton(canvas, paint, new RectF(985, 710, 1295, 790), "ADVANCED / LEGACY",\n                action == ACTION_ADVANCED, focused, !scanning);', '        drawButton(canvas, paint, new RectF(120, 710, 445, 790), launch,\n                action == ACTION_LAUNCH, focused, !scanning);\n        drawButton(canvas, paint, new RectF(470, 710, 795, 790), "IMPORT GAMES",\n                action == ACTION_IMPORT, focused, !scanning);\n        drawButton(canvas, paint, new RectF(820, 710, 1145, 790), "ADVANCED / LEGACY",\n                action == ACTION_ADVANCED, focused, !scanning);\n        drawButton(canvas, paint, new RectF(1170, 710, 1495, 790), "CONTROLS",\n                action == ACTION_CONTROLS, focused, !scanning);'),
+          ]
+          for old, new in replacements:
+              if old not in launcher:
+                  raise SystemExit(f"Expected launcher source block not found:\n{old}")
+              launcher = launcher.replace(old, new, 1)
+          launcher = launcher.replace('        Kq64ControllerMapping.installLauncherButton(this);\n', '', 1)
+          launcher_path.write_text(launcher, encoding="utf-8")
+          print("Integrated Controls as launcher action 4 and removed overlay installation.")
           PY
 
       - name: Upload corrected controller source
         uses: actions/upload-artifact@v4
         with:
           name: KQ64-controller-source-${{ github.sha }}
-          path: app/src/main/java/paulscode/android/mupen64plusae/Kq64ControllerMapping.java
+          path: |
+            app/src/main/java/paulscode/android/mupen64plusae/Kq64ControllerMapping.java
+            app/src/main/java/paulscode/android/mupen64plusae/QuestVrLauncherActivity.java
           if-no-files-found: error
           retention-days: 7
 
