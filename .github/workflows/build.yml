@@ -76,6 +76,33 @@ jobs:
             mupen64plus-video-gliden64/upstream/src/Graphics/OpenGLContext/GLSL/glsl_SpecialShadersFactory.cpp \
             mupen64plus-video-gliden64/upstream/src/Graphics/OpenGLContext/GLSL/glsl_FXAA.cpp
 
+      - name: Apply controller mapper compile fix
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path("app/src/main/java/paulscode/android/mupen64plusae/Kq64ControllerMapping.java")
+          text = path.read_text(encoding="utf-8")
+          old = '                drawText(canvas, paint, "CONTROLS", BUTTON_RECT.centerX(),'
+          new = '                MappingView.drawText(canvas, paint, "CONTROLS", BUTTON_RECT.centerX(),'
+          if old in text:
+              text = text.replace(old, new, 1)
+              path.write_text(text, encoding="utf-8")
+              print("Applied MappingView.drawText compile fix.")
+          elif new in text:
+              print("Controller mapper compile fix is already present.")
+          else:
+              raise SystemExit("Expected Controls drawText call was not found")
+          PY
+
+      - name: Upload corrected controller source
+        uses: actions/upload-artifact@v4
+        with:
+          name: KQ64-controller-source-${{ github.sha }}
+          path: app/src/main/java/paulscode/android/mupen64plusae/Kq64ControllerMapping.java
+          if-no-files-found: error
+          retention-days: 7
+
       - name: Build release APK
         run: |
           set -o pipefail
