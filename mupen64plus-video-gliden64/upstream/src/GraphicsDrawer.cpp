@@ -1715,13 +1715,21 @@ bool GraphicsDrawer::isClipped(u32 _v0, u32 _v1, u32 _v2) const
 
 bool GraphicsDrawer::isRejected(u32 _v0, u32 _v1, u32 _v2) const
 {
-	if (!GBI.isRej() || gSP.clipRatio < 2)
+	// Rejecting microcodes discard whole triangles that fall outside a guard band
+	// sized from the clip ratio, rather than clipping them. Honour a user supplied
+	// minimum so the band can be widened, which keeps geometry near the screen
+	// edges from being dropped as the camera turns.
+	u32 clipRatio = gSP.clipRatio;
+	if (config.generalEmulation.rejectionClipRatio > clipRatio)
+		clipRatio = config.generalEmulation.rejectionClipRatio;
+
+	if (!GBI.isRej() || clipRatio < 2)
 		return false;
 
 	static gDPScissor rejectBox;
 	if ((gDP.changed & CHANGED_REJECT_BOX) != 0) {
-		const f32 scissorWidth2 = (gDP.scissor.lrx - gDP.scissor.ulx) * (gSP.clipRatio - 1) * 0.5f;
-		const f32 scissorHeight2 = (gDP.scissor.lry - gDP.scissor.uly) * (gSP.clipRatio - 1) * 0.5f;
+		const f32 scissorWidth2 = (gDP.scissor.lrx - gDP.scissor.ulx) * (clipRatio - 1) * 0.5f;
+		const f32 scissorHeight2 = (gDP.scissor.lry - gDP.scissor.uly) * (clipRatio - 1) * 0.5f;
 		rejectBox.ulx = gDP.scissor.ulx - scissorWidth2;
 		rejectBox.lrx = gDP.scissor.lrx + scissorWidth2;
 		rejectBox.uly = gDP.scissor.uly - scissorHeight2;

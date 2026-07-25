@@ -465,6 +465,15 @@
             android:key="EnableClipping"
             android:title="@string/gliden64_enable_softclip_title"
             android:summary="@string/gliden64_enable_softclip_summary"/>
+        <paulscode.android.mupen64plusae.preference.SeekBarPreference
+            android:defaultValue="0"
+            android:key="RejectionClipRatio"
+            android:title="@string/gliden64_rejection_clip_ratio_title"
+            android:summary="@string/gliden64_rejection_clip_ratio_summary"
+            mupen64:maximumValue="8"
+            mupen64:minimumValue="0"
+            mupen64:stepSize="1"
+            mupen64:saveType="string" />
         <paulscode.android.mupen64plusae.preference.StringCheckBoxPreference
             android:defaultValue="True"
             android:key="EnableLegacyBlending"
