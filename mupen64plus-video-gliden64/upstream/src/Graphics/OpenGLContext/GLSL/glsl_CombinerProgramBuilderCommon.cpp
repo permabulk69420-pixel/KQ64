@@ -162,10 +162,18 @@ public:
 				"  gl_ClipDistance[0] = gl_Position.w - gl_Position.z;	\n"
 				;
 		} else if (config.generalEmulation.enableFragmentDepthWrite != 0 && _glinfo.noPerspective) {
+			// vZCoord is taken before gl_Position.z is touched, and writeDepth() derives
+			// gl_FragDepth from vZCoord rather than gl_FragCoord.z. So gl_Position.z only
+			// drives hardware clipping here and can be adjusted without affecting depth.
+			// Move the near plane towards the camera for clipped ucodes as well, matching
+			// what the enableClipping path below does. Without this, games using a ucode
+			// that clips (uClampMode == 0) get near-plane clipping in the player's face.
 			m_part =
 				"  vZCoord = gl_Position.z / gl_Position.w;	\n"
 				"  if (uClampMode > 0)	\n"
 				"    gl_Position.z = 0.0;	\n"
+				"  else	\n"
+				"    gl_Position.z /= 8.0;	\n"
 				;
 		} else if (config.generalEmulation.enableClipping != 0) {
 			// Move the near plane towards the camera.
