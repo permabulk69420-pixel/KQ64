@@ -55,7 +55,11 @@ jobs:
     - name: Get branch name
       id: var
       run: |
-        echo "branch=${{ steps.branch-name.outputs.current_branch }}" >> $GITHUB_OUTPUT
+        # Artifact names cannot contain '/', so flatten branch names such as
+        # feature/foo to feature-foo before using them in the artifact name.
+        echo "branch=${BRANCH//\//-}" >> $GITHUB_OUTPUT
+      env:
+        BRANCH: ${{ steps.branch-name.outputs.current_branch }}
 
     - name: Declare sha name
       uses: benjlevesque/short-sha@v3.0
