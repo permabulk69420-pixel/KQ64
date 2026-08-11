@@ -7,6 +7,7 @@ It is ready for people to try, not ready to pretend every N64 game is perfect.
 ## Highlights
 
 - stereoscopic rendering with separate per-eye geometry;
+- 1920x1440 per eye by default, twice the pixels of earlier builds;
 - recommended Stereo Cinema mode with a stable world-locked screen;
 - Experimental Immersive mode for games and scenes that tolerate a wider VR camera;
 - Quest Touch input and an in-launcher Player 1 controller mapper;
@@ -28,9 +29,9 @@ Mario Kart 64, Star Fox 64, Doom 64, Donkey Kong 64 and The Legend of Zelda: Oca
 
 ## Main known issues
 
-- original N64 camera culling can expose missing geometry when you look outside the intended frame;
+- Experimental Immersive renders a wider view than the field the games submit geometry for, so scenery can end at a hard edge; Stereo Cinema keeps the game's own camera and is not affected;
+- Experimental Immersive framing remains rough next to Stereo Cinema;
 - some menus, overlays, sprites, cutscenes and game-specific effects remain imperfect;
-- Experimental Immersive can produce odd camera direction, height or framing;
 - compatibility is game-specific and later levels may exercise different renderer paths;
 - the new launcher and controller mapper are functional but basic.
 
