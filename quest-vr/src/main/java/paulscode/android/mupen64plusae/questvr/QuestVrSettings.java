@@ -233,7 +233,6 @@ public final class QuestVrSettings {
                 " launchOverride=" + launchPresentationValid +
                 " preferencePresentation=" + preferencePresentation +
                 " explicitPresentation=" + preferences.contains("presentation_mode") +
-                " legacyAndroidImmersive=" + legacyAndroidImmersive +
                 " immersiveScale=" + requestedImmersiveScale + "->" + immersiveScale +
                 " sourceWidthMultiplierV2=" + requestedSourceWidthMultiplier + "->" +
                 sourceWidthMultiplier + " legacyWidthScale=" + legacySourceWidthScale +
