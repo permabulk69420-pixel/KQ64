@@ -97,13 +97,18 @@ public final class QuestVrSettings {
             return;
         }
 
-        final boolean questSaved = questPreferences.edit()
+        final SharedPreferences.Editor questEditor = questPreferences.edit()
                 .putBoolean("enabled", true)
                 .putBoolean("stereo_enabled", true)
                 .putString(SOURCE_WIDTH_MULTIPLIER_V2, "2.0")
                 .putString("max_stereo_source_width", Integer.toString(DEFAULT_MAX_SOURCE_WIDTH))
-                .putInt(QUEST_GRAPHICS_DEFAULTS_VERSION_KEY, QUEST_GRAPHICS_DEFAULTS_VERSION)
-                .commit();
+                .putInt(QUEST_GRAPHICS_DEFAULTS_VERSION_KEY, QUEST_GRAPHICS_DEFAULTS_VERSION);
+        // Write the recommended mode explicitly so it shows in the picker, but never overwrite a
+        // player who has already chosen immersive on purpose.
+        if (!questPreferences.contains("presentation_mode")) {
+            questEditor.putString("presentation_mode", PRESENTATION_CINEMA_SCREEN);
+        }
+        final boolean questSaved = questEditor.commit();
         if (questSaved) {
             QuestVrDiagnostics.info("QuestVrSettings",
                     "Applied persistent Quest graphics preset version=" +
@@ -173,16 +178,15 @@ public final class QuestVrSettings {
                 getFloat(values, "hud_scale", 1.0f));
         final float screenScale = clampFinite(requestedScreenScale,
                 MIN_SCREEN_SCALE, MAX_SCREEN_SCALE, 1.0f);
-        // Before this explicit setting existed, the only user-facing "Immersive mode" switch was
-        // Android's display/chrome preference. Honor its enabled state as a one-way fallback for
-        // existing installs, while the new Quest-specific setting takes precedence as soon as it
-        // exists. The default shared-preference filename is defined by PreferenceManager as the
-        // package name plus "_preferences"; avoiding an androidx dependency keeps this module thin.
-        final boolean legacyAndroidImmersive = globalPreferences.getBoolean(
-                "displayImmersiveMode_v2", true);
+        // Fall back to the cinema screen, which is the mode that is actually finished. This used
+        // to read displayImmersiveMode_v2, but that preference hides Android's navigation bar and
+        // has nothing to do with VR presentation, and it defaults to true: an install that had
+        // never chosen a presentation mode therefore started in immersive projection, which still
+        // renders wider than the field the games submit geometry for. The XML default of
+        // cinema_screen could not correct it either, because these preferences live in their own
+        // file and that default is only ever written to the main one.
         final String preferencePresentation = preferences.getString("presentation_mode",
-                legacyAndroidImmersive ? PRESENTATION_IMMERSIVE_PROJECTION
-                        : PRESENTATION_CINEMA_SCREEN);
+                PRESENTATION_CINEMA_SCREEN);
         final String launchPresentation = context instanceof Activity
                 ? ((Activity) context).getIntent().getStringExtra(EXTRA_PRESENTATION_MODE) : null;
         final boolean launchPresentationValid =

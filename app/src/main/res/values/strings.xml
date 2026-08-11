@@ -240,9 +240,9 @@
     <string name="questVrEnabled_title">Enable Quest VR</string>
     <string name="questVrEnabled_summary">Start OpenXR on a head-tracked Android device; other devices keep normal presentation.</string>
     <string name="questVrPresentation_title">VR presentation</string>
-    <string name="questVrPresentation_summary">Immersive projection submits per-eye projection views; cinema keeps the paired world-locked LOCAL-space screen. This is separate from Android’s navigation-bar immersive mode.</string>
-    <string name="questVrPresentation_immersive">Immersive projection</string>
-    <string name="questVrPresentation_cinema">World-locked cinema screen</string>
+    <string name="questVrPresentation_summary">Cinema shows the game on a stereoscopic screen fixed in the room, and is the finished mode. Immersive puts the game around you, but renders a wider view than N64 games draw, so scenery can end at a hard edge. This is separate from Android’s navigation-bar immersive mode.</string>
+    <string name="questVrPresentation_immersive">Immersive projection (experimental)</string>
+    <string name="questVrPresentation_cinema">World-locked cinema screen (recommended)</string>
     <string name="questVrImmersiveScale_title">Immersive field-of-view scale</string>
     <string name="questVrImmersiveScale_summary">Scales the aspect-fitted immersive image from 0.5 to 1.0. Default 1.0 shows the complete 4:3 source without cropping.</string>
     <string name="questVrStereo_title">Native stereo geometry</string>
