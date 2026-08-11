@@ -63,6 +63,9 @@ struct Config
 		u32 enableHWLighting;
 		u32 enableCoverage;
 		u32 enableClipping;
+		// Minimum clip ratio used to size the triangle rejection guard band.
+		// 0 leaves the ratio set by the game or the microcode untouched.
+		u32 rejectionClipRatio;
 		u32 enableCustomSettings;
 		u32 enableShadersStorage;
 		u32 enableLegacyBlending;

@@ -53,6 +53,9 @@ public class GLideN64Prefs {
     /** Enable software vertices clipping. Brings various benefits. */
     public final boolean enableSoftClipping;
 
+    /** Minimum clip ratio for the triangle rejection guard band. 0 uses the game's own ratio. */
+    public final int rejectionClipRatio;
+
     /** Do not use shaders to emulate N64 blending modes. Works faster on slow GPU. Can cause glitches. */
     public final boolean enableLegacyBlending;
 
@@ -202,6 +205,7 @@ public class GLideN64Prefs {
         enableHWLighting = emulationProfile.get( "EnableHWLighting", "False" ).equals( "True" );
         enableCoverage = emulationProfile.get( "EnableCoverage", "False" ).equals( "True" );
         enableSoftClipping = emulationProfile.get( "EnableClipping", "True" ).equals( "True" );
+        rejectionClipRatio = getSafeInt( emulationProfile, "RejectionClipRatio", 0);
         correctTexrectCoords = getSafeInt( emulationProfile, "CorrectTexrectCoords", 0);
         backgroundMode = getSafeInt( emulationProfile, "BackgroundsMode", 0);
         enableTexCoordBounds = emulationProfile.get( "EnableTexCoordBounds_v2", "True" ).equals( "True" );
