@@ -24,6 +24,22 @@ public final class QuestVrSettings {
     public static final int SAFE_MAX_SOURCE_HEIGHT = 1440;
     public static final int SAFE_MAX_SOURCE_PIXELS = 3_000_000;
 
+    /**
+     * Ceilings for an explicit {@code max_stereo_source_width} override.
+     *
+     * The safe limits above are the shipping default because oversized EGL pbuffers have failed
+     * silently on Quest around 2880 pixels wide. They also form a hard plateau: because the
+     * downscale below is uniform, the safe width alone pins every render-resolution preset to the
+     * same 1344x1008 per eye, so the larger presets cost memory without adding a single pixel.
+     * Raising the width preference past the safe value opts into these ceilings for width, height
+     * and total pixels together, which is what lets a taller preset survive the width clamp.
+     * Nothing here changes the default; the override has to be typed in deliberately and the
+     * result is reported in the existing producer-resolution diagnostics.
+     */
+    public static final int MAX_SOURCE_WIDTH_OVERRIDE = 4096;
+    public static final int MAX_SOURCE_HEIGHT_OVERRIDE = 2048;
+    public static final int MAX_SOURCE_PIXELS_OVERRIDE = 8_400_000;
+
     private static final float MIN_SCREEN_SCALE = 0.35f;
     private static final float MAX_SCREEN_SCALE = 2.0f;
     private static final float MIN_SCREEN_DISTANCE_METERS = 0.75f;
@@ -191,7 +207,7 @@ public final class QuestVrSettings {
         final int requestedMaxSourceWidth =
                 getInt(values, "max_stereo_source_width", SAFE_MAX_SOURCE_WIDTH);
         final int maxSourceWidth = clamp(requestedMaxSourceWidth, 640,
-                SAFE_MAX_SOURCE_WIDTH);
+                MAX_SOURCE_WIDTH_OVERRIDE);
         QuestVrDiagnostics.info("QuestVrSettings", "Loaded preferences name=" +
                 PREFERENCES_NAME + " containsEnabled=" + preferences.contains("enabled") +
                 " rawEnabled=" + values.get("enabled") +
@@ -302,13 +318,24 @@ public final class QuestVrSettings {
         final int requestedHeight = evenDimension(
                 safeBaseHeight * (double) configuration.stereoSourceWidthMultiplier * 0.5);
 
+        // Raising the width preference past the safe value lifts the height and pixel budgets
+        // with it. Lifting the width alone would leave the uniform downscale below pinned by
+        // whichever of the other two clamps first, so a taller preset would still collapse back
+        // to the plateau it is trying to escape.
+        final boolean overrideLimits =
+                configuration.maxStereoSourceWidth > SAFE_MAX_SOURCE_WIDTH;
+        final int maxSourceHeight =
+                overrideLimits ? MAX_SOURCE_HEIGHT_OVERRIDE : SAFE_MAX_SOURCE_HEIGHT;
+        final int maxSourcePixels =
+                overrideLimits ? MAX_SOURCE_PIXELS_OVERRIDE : SAFE_MAX_SOURCE_PIXELS;
+
         final double widthDownscale = Math.min(1.0,
                 configuration.maxStereoSourceWidth / (double) requestedWidth);
         final double heightDownscale = Math.min(1.0,
-                SAFE_MAX_SOURCE_HEIGHT / (double) requestedHeight);
+                maxSourceHeight / (double) requestedHeight);
         final double requestedPixels = (double) requestedWidth * requestedHeight;
-        final double pixelDownscale = requestedPixels > SAFE_MAX_SOURCE_PIXELS
-                ? Math.sqrt(SAFE_MAX_SOURCE_PIXELS / requestedPixels) : 1.0;
+        final double pixelDownscale = requestedPixels > maxSourcePixels
+                ? Math.sqrt(maxSourcePixels / requestedPixels) : 1.0;
         double downscale = Math.min(widthDownscale,
                 Math.min(heightDownscale, pixelDownscale));
         downscale = Math.max(0.0, Math.min(1.0, downscale));

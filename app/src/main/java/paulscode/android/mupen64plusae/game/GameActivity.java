@@ -631,16 +631,23 @@ public class GameActivity extends AppCompatActivity implements PromptConfirmList
                 " downscale=" + size.downscale + " clamped=" + size.clamped +
                 " limits width=" + size.widthLimited + " height=" + size.heightLimited +
                 " pixels=" + size.pixelLimited +
-                " userWidthCap=" + vr.maxStereoSourceWidth + " hardLimits=" +
+                " userWidthCap=" + vr.maxStereoSourceWidth + " safeLimits=" +
                 QuestVrSettings.SAFE_MAX_SOURCE_WIDTH + "x" +
                 QuestVrSettings.SAFE_MAX_SOURCE_HEIGHT + "/" +
-                QuestVrSettings.SAFE_MAX_SOURCE_PIXELS + "px");
+                QuestVrSettings.SAFE_MAX_SOURCE_PIXELS + "px overrideLimits=" +
+                QuestVrSettings.MAX_SOURCE_WIDTH_OVERRIDE + "x" +
+                QuestVrSettings.MAX_SOURCE_HEIGHT_OVERRIDE + "/" +
+                QuestVrSettings.MAX_SOURCE_PIXELS_OVERRIDE + "px");
         if (size.widthLimited) {
             QuestVrDiagnostics.warn(TAG, "Quest VR resolution plateau reached: this and " +
                     "larger presets with the same content aspect resolve to effectiveTotal=" +
                     size.actualWidth + "x" + size.actualHeight + " effectivePerEye=" +
                     size.actualPerEyeWidth + "x" + size.actualHeight +
-                    " at the current source-width cap");
+                    " at the current source-width cap of " + vr.maxStereoSourceWidth +
+                    "; raise max_stereo_source_width above " +
+                    QuestVrSettings.SAFE_MAX_SOURCE_WIDTH + " (up to " +
+                    QuestVrSettings.MAX_SOURCE_WIDTH_OVERRIDE +
+                    ") to lift this preset off the plateau");
         }
         return new int[] {size.actualWidth, size.actualHeight};
     }
