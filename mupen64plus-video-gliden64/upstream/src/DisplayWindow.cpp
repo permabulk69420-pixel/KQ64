@@ -147,49 +147,67 @@ void DisplayWindow::updateScale()
 void DisplayWindow::_setBufferSize()
 {
 	m_bAdjustScreen = false;
+
+	// Every decision below is about the shape of one eye's image. In VR the window is a
+	// packed side-by-side pair, so m_screenWidth spans two eyes and comparing it against
+	// the height makes a 4:3 per-eye target look like an ultrawide screen: "adjust" then
+	// computes a half-width squeeze that should never fire, and the forced ratios clamp
+	// the width below the real buffer so the second eye region is left uncovered. Reason
+	// in one-eye width and expand back afterwards. Outside VR the multiplier is 1 and this
+	// is the original calculation.
+	const u32 eyeCount = QuestVr::framebufferWidthMultiplier() == 0 ?
+		1 : QuestVr::framebufferWidthMultiplier();
+	const u32 screenWidth = m_screenWidth / eyeCount;
+	const u32 screenHeight = m_screenHeight;
+	u32 width = screenWidth;
+	u32 height = screenHeight;
+
 	switch (config.frameBufferEmulation.aspect) {
 	case Config::aStretch: // stretch
-		m_width = m_screenWidth;
-		m_height = m_screenHeight;
+		width = screenWidth;
+		height = screenHeight;
 		break;
 	case Config::a43: // force 4/3
-		if (m_screenWidth * 3 / 4 > m_screenHeight) {
-			m_height = m_screenHeight;
-			m_width = m_screenHeight * 4 / 3;
-		} else if (m_screenHeight * 4 / 3 > m_screenWidth) {
-			m_width = m_screenWidth;
-			m_height = m_screenWidth * 3 / 4;
+		if (screenWidth * 3 / 4 > screenHeight) {
+			height = screenHeight;
+			width = screenHeight * 4 / 3;
+		} else if (screenHeight * 4 / 3 > screenWidth) {
+			width = screenWidth;
+			height = screenWidth * 3 / 4;
 		} else {
-			m_width = m_screenWidth;
-			m_height = m_screenHeight;
+			width = screenWidth;
+			height = screenHeight;
 		}
 		break;
 	case Config::a169: // force 16/9
-		if (m_screenWidth * 9 / 16 > m_screenHeight) {
-			m_height = m_screenHeight;
-			m_width = m_screenHeight * 16 / 9;
-		} else if (m_screenHeight * 16 / 9 > m_screenWidth) {
-			m_width = m_screenWidth;
-			m_height = m_screenWidth * 9 / 16;
+		if (screenWidth * 9 / 16 > screenHeight) {
+			height = screenHeight;
+			width = screenHeight * 16 / 9;
+		} else if (screenHeight * 16 / 9 > screenWidth) {
+			width = screenWidth;
+			height = screenWidth * 9 / 16;
 		} else {
-			m_width = m_screenWidth;
-			m_height = m_screenHeight;
+			width = screenWidth;
+			height = screenHeight;
 		}
 		break;
 	case Config::aAdjust: // adjust
-		m_width = m_screenWidth;
-		m_height = m_screenHeight;
-		if (m_screenWidth * 3 / 4 > m_screenHeight) {
-			f32 width43 = m_screenHeight * 4.0f / 3.0f;
-			m_adjustScale = width43 / m_screenWidth;
+		width = screenWidth;
+		height = screenHeight;
+		if (screenWidth * 3 / 4 > screenHeight) {
+			f32 width43 = screenHeight * 4.0f / 3.0f;
+			m_adjustScale = width43 / screenWidth;
 			m_bAdjustScreen = true;
 		}
 		break;
 	default:
 		assert(false && "Unknown aspect ratio");
-		m_width = m_screenWidth;
-		m_height = m_screenHeight;
+		width = screenWidth;
+		height = screenHeight;
 	}
+
+	m_width = width * eyeCount;
+	m_height = height;
 }
 
 void DisplayWindow::readScreen(void **_pDest, long *_pWidth, long *_pHeight)
