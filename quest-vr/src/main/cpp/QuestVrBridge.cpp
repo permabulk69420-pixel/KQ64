@@ -282,6 +282,21 @@ struct State {
 
 State g;
 
+// The cinema screen is a panel fixed in the room, so the head must not also drive the game
+// camera behind it. Doing both pans the world while the panel stays put, and turning to look
+// at the edge of the screen swings the scene away at the same time. Immersive projection is
+// the mode where the head is the camera. Per-eye offsets are untouched, so stereo depth on
+// the cinema screen still works.
+float effectiveRotationStrength() {
+    return g.configurationPresentationMode == PresentationMode::CinemaScreen
+        ? 0.0f : g.configurationRotationStrength;
+}
+
+bool effectivePositionEnabled() {
+    return g.configurationPresentationMode == PresentationMode::CinemaScreen
+        ? false : g.configurationPositionEnabled;
+}
+
 const char* xrResultName(XrResult result) {
     static thread_local char buffer[XR_MAX_RESULT_STRING_SIZE];
     if (g.instance != XR_NULL_HANDLE && XR_SUCCEEDED(xrResultToString(g.instance, result, buffer))) {
@@ -787,8 +802,8 @@ void resolveRendererBridge() {
         }
         if (g.configureVr != nullptr) {
             g.configureVr(g.configurationStereoEnabled ? 1 : 0, g.configurationIpdMeters,
-                          g.configurationWorldUnitsPerMeter, g.configurationRotationStrength,
-                          g.configurationPositionEnabled ? 1 : 0, g.configurationMaxTranslationMeters,
+                          g.configurationWorldUnitsPerMeter, effectiveRotationStrength(),
+                          effectivePositionEnabled() ? 1 : 0, g.configurationMaxTranslationMeters,
                           g.configurationCameraOffsetX, g.configurationCameraOffsetY,
                           g.configurationCameraOffsetZ, g.configurationUseOpenXrFov ? 1 : 0,
                           g.configurationMarioKartProfileEnabled ? 1 : 0,
@@ -2234,8 +2249,8 @@ Java_paulscode_android_mupen64plusae_questvr_QuestVrBridge_nativeConfigure(
          g.configurationIpdMeters, g.configurationScreenScale,
          g.configurationScreenDistanceMeters,
          g.configurationStartupProofLayers ? 1 : 0, g.configurationWorldUnitsPerMeter,
-         g.configurationRotationStrength, -g.configurationRotationStrength,
-         g.configurationPositionEnabled ? 1 : 0,
+         effectiveRotationStrength(), -effectiveRotationStrength(),
+         effectivePositionEnabled() ? 1 : 0,
          g.configurationMaxTranslationMeters, g.configurationUseOpenXrFov ? 1 : 0,
          g.configurationMarioKartProfileEnabled ? 1 : 0,
          g.configurationMarioKartCameraOffsetY, g.configurationMarioKartCameraOffsetZ,
@@ -2243,8 +2258,8 @@ Java_paulscode_android_mupen64plusae_questvr_QuestVrBridge_nativeConfigure(
          g.debugLogging ? 1 : 0);
     if (g.configureVr != nullptr) {
         g.configureVr(g.configurationStereoEnabled ? 1 : 0, g.configurationIpdMeters,
-                      g.configurationWorldUnitsPerMeter, g.configurationRotationStrength,
-                      g.configurationPositionEnabled ? 1 : 0, g.configurationMaxTranslationMeters,
+                      g.configurationWorldUnitsPerMeter, effectiveRotationStrength(),
+                      effectivePositionEnabled() ? 1 : 0, g.configurationMaxTranslationMeters,
                       g.configurationCameraOffsetX, g.configurationCameraOffsetY,
                       g.configurationCameraOffsetZ, g.configurationUseOpenXrFov ? 1 : 0,
                       g.configurationMarioKartProfileEnabled ? 1 : 0,
