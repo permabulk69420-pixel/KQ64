@@ -297,6 +297,17 @@ bool effectivePositionEnabled() {
         ? false : g.configurationPositionEnabled;
 }
 
+// Replacing the game's angular terms with the headset FOV only makes sense when the headset is
+// the window onto the world. On the cinema screen the result is painted on a flat panel, so the
+// wider FOV asks for geometry outside the frustum the game submitted: the scene is cut off with
+// a hard vertical edge exactly where the original frustum ended, and world draws no longer agree
+// with screen-space elements that never went through the replacement. Let the game keep its own
+// projection there.
+bool effectiveUseOpenXrFov() {
+    return g.configurationPresentationMode == PresentationMode::CinemaScreen
+        ? false : g.configurationUseOpenXrFov;
+}
+
 const char* xrResultName(XrResult result) {
     static thread_local char buffer[XR_MAX_RESULT_STRING_SIZE];
     if (g.instance != XR_NULL_HANDLE && XR_SUCCEEDED(xrResultToString(g.instance, result, buffer))) {
@@ -805,7 +816,7 @@ void resolveRendererBridge() {
                           g.configurationWorldUnitsPerMeter, effectiveRotationStrength(),
                           effectivePositionEnabled() ? 1 : 0, g.configurationMaxTranslationMeters,
                           g.configurationCameraOffsetX, g.configurationCameraOffsetY,
-                          g.configurationCameraOffsetZ, g.configurationUseOpenXrFov ? 1 : 0,
+                          g.configurationCameraOffsetZ, effectiveUseOpenXrFov() ? 1 : 0,
                           g.configurationMarioKartProfileEnabled ? 1 : 0,
                           g.configurationMarioKartCameraOffsetY,
                           g.configurationMarioKartCameraOffsetZ);
@@ -1628,7 +1639,7 @@ bool renderEye(uint32_t eye, uint32_t imageIndex, RenderContent content,
                 // squash. Stretching to the complete eye is the correct presentation for a
                 // full-FOV render; the non-square source pixels are simply resampled.
                 const float sourceAspect = std::clamp(g.sourceContentAspect, 0.5f, 3.0f);
-                if (!g.configurationUseOpenXrFov) {
+                if (!effectiveUseOpenXrFov()) {
                     if (sourceAspect > targetAspect) {
                         scaleY = targetAspect / sourceAspect;
                     } else if (sourceAspect < targetAspect) {
@@ -1641,7 +1652,7 @@ bool renderEye(uint32_t eye, uint32_t imageIndex, RenderContent content,
                     LOGI("Immersive aspect fit openXrFov=%d sourceAspect=%.4f targetAspect=%.4f "
                          "userScale=%.3f effectiveNdcScale=%.4fx%.4f sourcePerEye=%dx%d "
                          "consumerEye=%dx%d",
-                         g.configurationUseOpenXrFov ? 1 : 0,
+                         effectiveUseOpenXrFov() ? 1 : 0,
                          sourceAspect, targetAspect, g.configurationImmersiveViewScale,
                          scaleX, scaleY,
                          g.stereoSourceActive ? g.sourceWidth / 2 : g.sourceWidth,
@@ -2251,7 +2262,7 @@ Java_paulscode_android_mupen64plusae_questvr_QuestVrBridge_nativeConfigure(
          g.configurationStartupProofLayers ? 1 : 0, g.configurationWorldUnitsPerMeter,
          effectiveRotationStrength(), -effectiveRotationStrength(),
          effectivePositionEnabled() ? 1 : 0,
-         g.configurationMaxTranslationMeters, g.configurationUseOpenXrFov ? 1 : 0,
+         g.configurationMaxTranslationMeters, effectiveUseOpenXrFov() ? 1 : 0,
          g.configurationMarioKartProfileEnabled ? 1 : 0,
          g.configurationMarioKartCameraOffsetY, g.configurationMarioKartCameraOffsetZ,
          g.sourceBlitReady ? 1 : 0,
@@ -2261,7 +2272,7 @@ Java_paulscode_android_mupen64plusae_questvr_QuestVrBridge_nativeConfigure(
                       g.configurationWorldUnitsPerMeter, effectiveRotationStrength(),
                       effectivePositionEnabled() ? 1 : 0, g.configurationMaxTranslationMeters,
                       g.configurationCameraOffsetX, g.configurationCameraOffsetY,
-                      g.configurationCameraOffsetZ, g.configurationUseOpenXrFov ? 1 : 0,
+                      g.configurationCameraOffsetZ, effectiveUseOpenXrFov() ? 1 : 0,
                       g.configurationMarioKartProfileEnabled ? 1 : 0,
                       g.configurationMarioKartCameraOffsetY,
                       g.configurationMarioKartCameraOffsetZ);
