@@ -25,17 +25,26 @@ public final class QuestVrSettings {
     public static final int SAFE_MAX_SOURCE_PIXELS = 3_000_000;
 
     /**
-     * Ceilings for an explicit {@code max_stereo_source_width} override.
+     * Shipping default for {@code max_stereo_source_width}, and the ceilings a larger value opts
+     * into.
      *
-     * The safe limits above are the shipping default because oversized EGL pbuffers have failed
-     * silently on Quest around 2880 pixels wide. They also form a hard plateau: because the
-     * downscale below is uniform, the safe width alone pins every render-resolution preset to the
-     * same 1344x1008 per eye, so the larger presets cost memory without adding a single pixel.
-     * Raising the width preference past the safe value opts into these ceilings for width, height
-     * and total pixels together, which is what lets a taller preset survive the width clamp.
-     * Nothing here changes the default; the override has to be typed in deliberately and the
-     * result is reported in the existing producer-resolution diagnostics.
+     * The safe limits above used to be the default, which pinned every render-resolution preset to
+     * the same 1344x1008 per eye: the downscale is uniform, so a width clamp took the same
+     * proportion off the height and the larger presets cost memory without adding a pixel. Because
+     * one eye of a 2688 wide pair is exactly 1344, the preset that fits was also the only preset
+     * that did anything.
+     *
+     * The default now clears that plateau, so a Quest install renders 1920x1440 per eye without
+     * anyone having to discover a number to type. Values above the safe width lift the height and
+     * megapixel budgets with it, since raising width alone leaves the uniform downscale pinned by
+     * whichever other budget clamps first.
+     *
+     * A larger producer is the thing to suspect first if a headset shows a black or missing image,
+     * because an oversized EGL pbuffer can fail without reporting an error. The resolved size is
+     * reported in the producer-resolution diagnostics, and lowering this preference is the way
+     * back.
      */
+    public static final int DEFAULT_MAX_SOURCE_WIDTH = 3840;
     public static final int MAX_SOURCE_WIDTH_OVERRIDE = 4096;
     public static final int MAX_SOURCE_HEIGHT_OVERRIDE = 2048;
     public static final int MAX_SOURCE_PIXELS_OVERRIDE = 8_400_000;
@@ -50,8 +59,8 @@ public final class QuestVrSettings {
             "stereo_source_width_multiplier_v2";
     private static final String QUEST_GRAPHICS_DEFAULTS_VERSION_KEY =
             "quest_graphics_defaults_version";
-    private static final int QUEST_GRAPHICS_DEFAULTS_VERSION = 1;
-    private static final String QUEST_RENDER_RESOLUTION = "1008";
+    private static final int QUEST_GRAPHICS_DEFAULTS_VERSION = 2;
+    private static final String QUEST_RENDER_RESOLUTION = "1440";
     private static final String QUEST_EMULATION_PROFILE = "GlideN64-Very-Accurate";
 
     private QuestVrSettings() {
@@ -92,7 +101,7 @@ public final class QuestVrSettings {
                 .putBoolean("enabled", true)
                 .putBoolean("stereo_enabled", true)
                 .putString(SOURCE_WIDTH_MULTIPLIER_V2, "2.0")
-                .putString("max_stereo_source_width", Integer.toString(SAFE_MAX_SOURCE_WIDTH))
+                .putString("max_stereo_source_width", Integer.toString(DEFAULT_MAX_SOURCE_WIDTH))
                 .putInt(QUEST_GRAPHICS_DEFAULTS_VERSION_KEY, QUEST_GRAPHICS_DEFAULTS_VERSION)
                 .commit();
         if (questSaved) {
@@ -100,7 +109,7 @@ public final class QuestVrSettings {
                     "Applied persistent Quest graphics preset version=" +
                             QUEST_GRAPHICS_DEFAULTS_VERSION + " resolution=" +
                             QUEST_RENDER_RESOLUTION + " profile=" + QUEST_EMULATION_PROFILE +
-                            " stereoSource=2.0 maxWidth=" + SAFE_MAX_SOURCE_WIDTH);
+                            " stereoSource=2.0 maxWidth=" + DEFAULT_MAX_SOURCE_WIDTH);
         } else {
             QuestVrDiagnostics.warn("QuestVrSettings",
                     "Global Quest graphics defaults saved, but VR defaults marker failed");
@@ -205,7 +214,7 @@ public final class QuestVrSettings {
         final float sourceWidthMultiplier = clampFinite(requestedSourceWidthMultiplier,
                 0.5f, 2.0f, 2.0f);
         final int requestedMaxSourceWidth =
-                getInt(values, "max_stereo_source_width", SAFE_MAX_SOURCE_WIDTH);
+                getInt(values, "max_stereo_source_width", DEFAULT_MAX_SOURCE_WIDTH);
         final int maxSourceWidth = clamp(requestedMaxSourceWidth, 640,
                 MAX_SOURCE_WIDTH_OVERRIDE);
         QuestVrDiagnostics.info("QuestVrSettings", "Loaded preferences name=" +

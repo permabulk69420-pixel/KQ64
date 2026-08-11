@@ -280,7 +280,7 @@
     <string name="questVrSourceScale_title">Stereo source resolution multiplier</string>
     <string name="questVrSourceScale_summary">Default 2 requests the selected flat resolution for each eye. Lower values reduce both axes while preserving the per-eye aspect; Quest safety limits still clamp the complete side-by-side buffer.</string>
     <string name="questVrSourceMaximum_title">Maximum source width</string>
-    <string name="questVrSourceMaximum_summary">Requested cap for the full side-by-side source. The tested default of 2688 holds every render resolution to 1344 x 1008 per eye, so larger presets cost memory without adding pixels. Values above 2688, up to 4096, also lift the height and megapixel budgets so taller presets survive; these are untested and can fail silently on some headsets.</string>
+    <string name="questVrSourceMaximum_summary">Cap for the full side-by-side source, covering both eyes. The default of 3840 gives 1920 x 1440 per eye. Lower values reduce resolution: at 2688 every render resolution collapses to 1344 x 1008. Up to 4096 is allowed. If the headset shows a black or missing image, lower this first, since an oversized buffer can fail without reporting an error.</string>
     <string name="questVrTouch_title">Quest controller fallback</string>
     <string name="questVrTouch_summary">Map OpenXR Touch actions into normal N64 player-one input.</string>
     <string name="questVrDebug_title">Periodic VR diagnostics</string>
