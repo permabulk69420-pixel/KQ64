@@ -55,3 +55,7 @@ tx.exe
 
 # Quest VR diagnostic captures
 quest-vr-diagnostic-*.log
+
+# Signing keys must never enter this public repository
+*.keystore
+*.jks
