@@ -73,7 +73,7 @@ final class Kq64ControllerMapping {
                 "Installed Z-ordered launcher Controls surface above QuestVrLauncherSurface");
     }
 
-    private static void show(@NonNull Activity activity) {
+    static void show(@NonNull Activity activity) {
         new MappingDialog(activity).show();
     }
 
@@ -144,7 +144,7 @@ final class Kq64ControllerMapping {
                         Color.argb(220, 19, 158, 222));
                 canvas.drawRoundRect(BUTTON_RECT, 25, 25, paint);
                 paint.setStyle(Paint.Style.FILL);
-                drawText(canvas, paint, "CONTROLS", BUTTON_RECT.centerX(),
+                MappingView.drawText(canvas, paint, "CONTROLS", BUTTON_RECT.centerX(),
                         BUTTON_RECT.centerY() + 7, 18, Color.WHITE,
                         Paint.Align.CENTER, true);
                 canvas.restore();
@@ -323,6 +323,7 @@ final class Kq64ControllerMapping {
         private boolean mTriggerReady;
         private boolean mTriggerPressed;
         private long mNextNavigationTime;
+        private long mIgnoreBackUntil;
         private float mTouchDownY;
         private String mStatus = "Select a row, then press a Quest button or move an axis";
 
@@ -480,6 +481,9 @@ final class Kq64ControllerMapping {
                     cancelCapture();
                 } else {
                     bindInput(keyCode);
+                    if (keyCode == KeyEvent.KEYCODE_BUTTON_B) {
+                        mIgnoreBackUntil = SystemClock.uptimeMillis() + 600L;
+                    }
                 }
                 return true;
             }
@@ -511,7 +515,14 @@ final class Kq64ControllerMapping {
                     resetToDefault();
                     return true;
                 case KeyEvent.KEYCODE_BUTTON_B:
+                    mDialog.dismiss();
+                    return true;
                 case KeyEvent.KEYCODE_BACK:
+                    if (SystemClock.uptimeMillis() < mIgnoreBackUntil) {
+                        return true;
+                    }
+                    mDialog.dismiss();
+                    return true;
                 case KeyEvent.KEYCODE_ESCAPE:
                     mDialog.dismiss();
                     return true;

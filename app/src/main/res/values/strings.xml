@@ -240,9 +240,9 @@
     <string name="questVrEnabled_title">Enable Quest VR</string>
     <string name="questVrEnabled_summary">Start OpenXR on a head-tracked Android device; other devices keep normal presentation.</string>
     <string name="questVrPresentation_title">VR presentation</string>
-    <string name="questVrPresentation_summary">Immersive projection submits per-eye projection views; cinema keeps the paired world-locked LOCAL-space screen. This is separate from Android’s navigation-bar immersive mode.</string>
-    <string name="questVrPresentation_immersive">Immersive projection</string>
-    <string name="questVrPresentation_cinema">World-locked cinema screen</string>
+    <string name="questVrPresentation_summary">Cinema shows the game on a stereoscopic screen fixed in the room, and is the finished mode. Immersive puts the game around you, but renders a wider view than N64 games draw, so scenery can end at a hard edge. This is separate from Android’s navigation-bar immersive mode.</string>
+    <string name="questVrPresentation_immersive">Immersive projection (experimental)</string>
+    <string name="questVrPresentation_cinema">World-locked cinema screen (recommended)</string>
     <string name="questVrImmersiveScale_title">Immersive field-of-view scale</string>
     <string name="questVrImmersiveScale_summary">Scales the aspect-fitted immersive image from 0.5 to 1.0. Default 1.0 shows the complete 4:3 source without cropping.</string>
     <string name="questVrStereo_title">Native stereo geometry</string>
@@ -280,7 +280,7 @@
     <string name="questVrSourceScale_title">Stereo source resolution multiplier</string>
     <string name="questVrSourceScale_summary">Default 2 requests the selected flat resolution for each eye. Lower values reduce both axes while preserving the per-eye aspect; Quest safety limits still clamp the complete side-by-side buffer.</string>
     <string name="questVrSourceMaximum_title">Maximum source width</string>
-    <string name="questVrSourceMaximum_summary">Requested cap for the full side-by-side source. Quest safety limits never allow more than 2688 wide, 1440 high, or 3 megapixels.</string>
+    <string name="questVrSourceMaximum_summary">Cap for the full side-by-side source, covering both eyes. The default of 3840 gives 1920 x 1440 per eye. Lower values reduce resolution: at 2688 every render resolution collapses to 1344 x 1008. Up to 4096 is allowed. If the headset shows a black or missing image, lower this first, since an oversized buffer can fail without reporting an error.</string>
     <string name="questVrTouch_title">Quest controller fallback</string>
     <string name="questVrTouch_summary">Map OpenXR Touch actions into normal N64 player-one input.</string>
     <string name="questVrDebug_title">Periodic VR diagnostics</string>
@@ -505,6 +505,8 @@
     <string name="gliden64_enable_coverage_summary">Enable pixel coverage calculation. Used for better blending emulation and wire-frame mode. Needs fast GPU.</string>
     <string name="gliden64_enable_softclip_title">Software Vertex Clipping</string>
     <string name="gliden64_enable_softclip_summary">Performs vertex clipping in software, generally more accurate, disable if there are issues.</string>
+    <string name="gliden64_rejection_clip_ratio_title">Edge rejection guard band</string>
+    <string name="gliden64_rejection_clip_ratio_summary">Widens the guard band for games whose microcode drops whole triangles at the screen edges instead of clipping them, which reduces geometry popping in and out as the camera turns. 0 keeps the value the game asks for. Has no effect on games that do not use a rejecting microcode.</string>
     <string name="gliden64_enable_legacy_blending_title">Legacy blending</string>
     <string name="gliden64_enable_legacy_blending_summary">Disabling this produces more correct lighting and fog, but it is slower on some devices.</string>
     <string name="gliden64_enable_fragment_depth_write_title">Fragment based depth</string>

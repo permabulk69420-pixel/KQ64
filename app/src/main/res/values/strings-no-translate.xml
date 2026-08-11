@@ -2,12 +2,12 @@
 <resources>
 
     <!-- Proper names, trademarks, etc. -->
-    <string name="app_name" translatable="false">M64Plus AE</string>
+    <string name="app_name" translatable="false">KQ-64</string>
 
     <!-- Web links, email addresses, etc. -->
-    <string name="uri_forum" translatable="false">http://www.paulscode.com/forum/index.php?topic=197.msg3018#msg3018</string>
-    <string name="uri_bugReport" translatable="false">http://github.com/mupen64plus-ae/mupen64plus-ae/discussions</string>
-    <string name="uri_credits" translatable="false">http://www.paulscode.com/forum/index.php?topic=836.msg7873#msg7873</string>
+    <string name="uri_forum" translatable="false">https://github.com/permabulk69420-pixel/mupen64plus-ae/discussions</string>
+    <string name="uri_bugReport" translatable="false">https://github.com/permabulk69420-pixel/mupen64plus-ae/issues</string>
+    <string name="uri_credits" translatable="false">https://github.com/permabulk69420-pixel/mupen64plus-ae#credits</string>
     <string name="assetExtractor_uriHelp" translatable="false">tinyurl.com/bfbb4jc</string>
 
     <!-- Strings only seen in the eclipse editor -->
@@ -28,7 +28,7 @@
     <string name="DiagnosticActivity_title" translatable="false">@string/menuItem_controllerDiagnostics</string>
     <string name="GameActivity_title" translatable="false">@string/app_name</string>
     <string name="CheatEditorActivity_title" translatable="false">@string/menuItem_cheatEditor</string>
-    
+
     <!-- Aliases to other strings -->
     <string name="selectedValue" translatable="false">%1$s</string>
     <string name="inputMapActivity_saveSlot" translatable="false">@string/menuItem_slotSave</string>

@@ -282,6 +282,32 @@ struct State {
 
 State g;
 
+// The cinema screen is a panel fixed in the room, so the head must not also drive the game
+// camera behind it. Doing both pans the world while the panel stays put, and turning to look
+// at the edge of the screen swings the scene away at the same time. Immersive projection is
+// the mode where the head is the camera. Per-eye offsets are untouched, so stereo depth on
+// the cinema screen still works.
+float effectiveRotationStrength() {
+    return g.configurationPresentationMode == PresentationMode::CinemaScreen
+        ? 0.0f : g.configurationRotationStrength;
+}
+
+bool effectivePositionEnabled() {
+    return g.configurationPresentationMode == PresentationMode::CinemaScreen
+        ? false : g.configurationPositionEnabled;
+}
+
+// Replacing the game's angular terms with the headset FOV only makes sense when the headset is
+// the window onto the world. On the cinema screen the result is painted on a flat panel, so the
+// wider FOV asks for geometry outside the frustum the game submitted: the scene is cut off with
+// a hard vertical edge exactly where the original frustum ended, and world draws no longer agree
+// with screen-space elements that never went through the replacement. Let the game keep its own
+// projection there.
+bool effectiveUseOpenXrFov() {
+    return g.configurationPresentationMode == PresentationMode::CinemaScreen
+        ? false : g.configurationUseOpenXrFov;
+}
+
 const char* xrResultName(XrResult result) {
     static thread_local char buffer[XR_MAX_RESULT_STRING_SIZE];
     if (g.instance != XR_NULL_HANDLE && XR_SUCCEEDED(xrResultToString(g.instance, result, buffer))) {
@@ -528,6 +554,18 @@ XrQuaternionf normalizeQuaternion(XrQuaternionf quaternion) {
     return quaternion;
 }
 
+// Rotation about the up axis only. A cinema screen hangs in the room, so it should be upright
+// and level however the player's head happened to be tilted when it was anchored: keeping pitch
+// leans the panel and plants it above or below eye height, and keeping roll tips the picture in
+// the frame. OpenXR is Y-up.
+XrQuaternionf yawOnlyQuaternion(const XrQuaternionf& rawQuaternion) {
+    const XrQuaternionf q = normalizeQuaternion(rawQuaternion);
+    const float yaw = std::atan2(2.0f * (q.w * q.y + q.x * q.z),
+        1.0f - 2.0f * (q.y * q.y + q.z * q.z));
+    const float half = yaw * 0.5f;
+    return {0.0f, std::sin(half), 0.0f, std::cos(half)};
+}
+
 XrVector3f rotateVector(const XrQuaternionf& rawQuaternion, const XrVector3f& vector) {
     const XrQuaternionf quaternion = normalizeQuaternion(rawQuaternion);
     const XrVector3f uv{
@@ -558,7 +596,10 @@ void anchorScreenToCurrentView(uint32_t viewCount) {
         center.y = (leftPose.position.y + g.views[1].pose.position.y) * 0.5f;
         center.z = (leftPose.position.z + g.views[1].pose.position.z) * 0.5f;
     }
-    const XrQuaternionf orientation = normalizeQuaternion(leftPose.orientation);
+    // Yaw only, so the panel hangs upright and level and the offset that places it stays
+    // horizontal: the screen lands directly ahead at the height of the head rather than
+    // wherever the head happened to be pointing.
+    const XrQuaternionf orientation = yawOnlyQuaternion(leftPose.orientation);
     const XrVector3f offset = rotateVector(orientation,
         {0.0f, 0.0f, -g.configurationScreenDistanceMeters});
     g.screenPose.orientation = orientation;
@@ -787,10 +828,10 @@ void resolveRendererBridge() {
         }
         if (g.configureVr != nullptr) {
             g.configureVr(g.configurationStereoEnabled ? 1 : 0, g.configurationIpdMeters,
-                          g.configurationWorldUnitsPerMeter, g.configurationRotationStrength,
-                          g.configurationPositionEnabled ? 1 : 0, g.configurationMaxTranslationMeters,
+                          g.configurationWorldUnitsPerMeter, effectiveRotationStrength(),
+                          effectivePositionEnabled() ? 1 : 0, g.configurationMaxTranslationMeters,
                           g.configurationCameraOffsetX, g.configurationCameraOffsetY,
-                          g.configurationCameraOffsetZ, g.configurationUseOpenXrFov ? 1 : 0,
+                          g.configurationCameraOffsetZ, effectiveUseOpenXrFov() ? 1 : 0,
                           g.configurationMarioKartProfileEnabled ? 1 : 0,
                           g.configurationMarioKartCameraOffsetY,
                           g.configurationMarioKartCameraOffsetZ);
@@ -1603,21 +1644,30 @@ bool renderEye(uint32_t eye, uint32_t imageIndex, RenderContent content,
                                g.sourceTransform.data());
 
             if (presentationMode == PresentationMode::ImmersiveProjection) {
-                // The emulator's per-eye content is normally 4:3 while Quest's eye swapchain is
-                // close to square. Aspect-fit into the projection image so the full useful source
-                // remains visible instead of being stretched or cropped to the complete eye.
+                // Only aspect-fit a source that is a 4:3 picture. When the OpenXR FOV path is
+                // active GLideN64 has already replaced the game's angular terms with this eye's
+                // full runtime FOV, so NDC -1..1 in the source means the FOV edges, not the
+                // edges of a 4:3 image. Fitting it then maps the full vertical FOV onto
+                // targetAspect/sourceAspect of the eye while the layer still submits the full
+                // FOV, and the world is compressed vertically by exactly that ratio: the
+                // checked-in Quest 3S log shows effectiveNdcScale=1.0000x0.7159, a 28% vertical
+                // squash. Stretching to the complete eye is the correct presentation for a
+                // full-FOV render; the non-square source pixels are simply resampled.
                 const float sourceAspect = std::clamp(g.sourceContentAspect, 0.5f, 3.0f);
-                if (sourceAspect > targetAspect) {
-                    scaleY = targetAspect / sourceAspect;
-                } else if (sourceAspect < targetAspect) {
-                    scaleX = sourceAspect / targetAspect;
+                if (!effectiveUseOpenXrFov()) {
+                    if (sourceAspect > targetAspect) {
+                        scaleY = targetAspect / sourceAspect;
+                    } else if (sourceAspect < targetAspect) {
+                        scaleX = sourceAspect / targetAspect;
+                    }
                 }
                 scaleX *= g.configurationImmersiveViewScale;
                 scaleY *= g.configurationImmersiveViewScale;
                 if (!g.immersiveScaleLogged) {
-                    LOGI("Immersive aspect fit sourceAspect=%.4f targetAspect=%.4f "
+                    LOGI("Immersive aspect fit openXrFov=%d sourceAspect=%.4f targetAspect=%.4f "
                          "userScale=%.3f effectiveNdcScale=%.4fx%.4f sourcePerEye=%dx%d "
                          "consumerEye=%dx%d",
+                         effectiveUseOpenXrFov() ? 1 : 0,
                          sourceAspect, targetAspect, g.configurationImmersiveViewScale,
                          scaleX, scaleY,
                          g.stereoSourceActive ? g.sourceWidth / 2 : g.sourceWidth,
@@ -2225,19 +2275,19 @@ Java_paulscode_android_mupen64plusae_questvr_QuestVrBridge_nativeConfigure(
          g.configurationIpdMeters, g.configurationScreenScale,
          g.configurationScreenDistanceMeters,
          g.configurationStartupProofLayers ? 1 : 0, g.configurationWorldUnitsPerMeter,
-         g.configurationRotationStrength, -g.configurationRotationStrength,
-         g.configurationPositionEnabled ? 1 : 0,
-         g.configurationMaxTranslationMeters, g.configurationUseOpenXrFov ? 1 : 0,
+         effectiveRotationStrength(), -effectiveRotationStrength(),
+         effectivePositionEnabled() ? 1 : 0,
+         g.configurationMaxTranslationMeters, effectiveUseOpenXrFov() ? 1 : 0,
          g.configurationMarioKartProfileEnabled ? 1 : 0,
          g.configurationMarioKartCameraOffsetY, g.configurationMarioKartCameraOffsetZ,
          g.sourceBlitReady ? 1 : 0,
          g.debugLogging ? 1 : 0);
     if (g.configureVr != nullptr) {
         g.configureVr(g.configurationStereoEnabled ? 1 : 0, g.configurationIpdMeters,
-                      g.configurationWorldUnitsPerMeter, g.configurationRotationStrength,
-                      g.configurationPositionEnabled ? 1 : 0, g.configurationMaxTranslationMeters,
+                      g.configurationWorldUnitsPerMeter, effectiveRotationStrength(),
+                      effectivePositionEnabled() ? 1 : 0, g.configurationMaxTranslationMeters,
                       g.configurationCameraOffsetX, g.configurationCameraOffsetY,
-                      g.configurationCameraOffsetZ, g.configurationUseOpenXrFov ? 1 : 0,
+                      g.configurationCameraOffsetZ, effectiveUseOpenXrFov() ? 1 : 0,
                       g.configurationMarioKartProfileEnabled ? 1 : 0,
                       g.configurationMarioKartCameraOffsetY,
                       g.configurationMarioKartCameraOffsetZ);

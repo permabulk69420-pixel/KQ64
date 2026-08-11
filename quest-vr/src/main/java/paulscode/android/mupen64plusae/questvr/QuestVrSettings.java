@@ -24,6 +24,31 @@ public final class QuestVrSettings {
     public static final int SAFE_MAX_SOURCE_HEIGHT = 1440;
     public static final int SAFE_MAX_SOURCE_PIXELS = 3_000_000;
 
+    /**
+     * Shipping default for {@code max_stereo_source_width}, and the ceilings a larger value opts
+     * into.
+     *
+     * The safe limits above used to be the default, which pinned every render-resolution preset to
+     * the same 1344x1008 per eye: the downscale is uniform, so a width clamp took the same
+     * proportion off the height and the larger presets cost memory without adding a pixel. Because
+     * one eye of a 2688 wide pair is exactly 1344, the preset that fits was also the only preset
+     * that did anything.
+     *
+     * The default now clears that plateau, so a Quest install renders 1920x1440 per eye without
+     * anyone having to discover a number to type. Values above the safe width lift the height and
+     * megapixel budgets with it, since raising width alone leaves the uniform downscale pinned by
+     * whichever other budget clamps first.
+     *
+     * A larger producer is the thing to suspect first if a headset shows a black or missing image,
+     * because an oversized EGL pbuffer can fail without reporting an error. The resolved size is
+     * reported in the producer-resolution diagnostics, and lowering this preference is the way
+     * back.
+     */
+    public static final int DEFAULT_MAX_SOURCE_WIDTH = 3840;
+    public static final int MAX_SOURCE_WIDTH_OVERRIDE = 4096;
+    public static final int MAX_SOURCE_HEIGHT_OVERRIDE = 2048;
+    public static final int MAX_SOURCE_PIXELS_OVERRIDE = 8_400_000;
+
     private static final float MIN_SCREEN_SCALE = 0.35f;
     private static final float MAX_SCREEN_SCALE = 2.0f;
     private static final float MIN_SCREEN_DISTANCE_METERS = 0.75f;
@@ -34,8 +59,8 @@ public final class QuestVrSettings {
             "stereo_source_width_multiplier_v2";
     private static final String QUEST_GRAPHICS_DEFAULTS_VERSION_KEY =
             "quest_graphics_defaults_version";
-    private static final int QUEST_GRAPHICS_DEFAULTS_VERSION = 1;
-    private static final String QUEST_RENDER_RESOLUTION = "1008";
+    private static final int QUEST_GRAPHICS_DEFAULTS_VERSION = 2;
+    private static final String QUEST_RENDER_RESOLUTION = "1440";
     private static final String QUEST_EMULATION_PROFILE = "GlideN64-Very-Accurate";
 
     private QuestVrSettings() {
@@ -72,19 +97,24 @@ public final class QuestVrSettings {
             return;
         }
 
-        final boolean questSaved = questPreferences.edit()
+        final SharedPreferences.Editor questEditor = questPreferences.edit()
                 .putBoolean("enabled", true)
                 .putBoolean("stereo_enabled", true)
                 .putString(SOURCE_WIDTH_MULTIPLIER_V2, "2.0")
-                .putString("max_stereo_source_width", Integer.toString(SAFE_MAX_SOURCE_WIDTH))
-                .putInt(QUEST_GRAPHICS_DEFAULTS_VERSION_KEY, QUEST_GRAPHICS_DEFAULTS_VERSION)
-                .commit();
+                .putString("max_stereo_source_width", Integer.toString(DEFAULT_MAX_SOURCE_WIDTH))
+                .putInt(QUEST_GRAPHICS_DEFAULTS_VERSION_KEY, QUEST_GRAPHICS_DEFAULTS_VERSION);
+        // Write the recommended mode explicitly so it shows in the picker, but never overwrite a
+        // player who has already chosen immersive on purpose.
+        if (!questPreferences.contains("presentation_mode")) {
+            questEditor.putString("presentation_mode", PRESENTATION_CINEMA_SCREEN);
+        }
+        final boolean questSaved = questEditor.commit();
         if (questSaved) {
             QuestVrDiagnostics.info("QuestVrSettings",
                     "Applied persistent Quest graphics preset version=" +
                             QUEST_GRAPHICS_DEFAULTS_VERSION + " resolution=" +
                             QUEST_RENDER_RESOLUTION + " profile=" + QUEST_EMULATION_PROFILE +
-                            " stereoSource=2.0 maxWidth=" + SAFE_MAX_SOURCE_WIDTH);
+                            " stereoSource=2.0 maxWidth=" + DEFAULT_MAX_SOURCE_WIDTH);
         } else {
             QuestVrDiagnostics.warn("QuestVrSettings",
                     "Global Quest graphics defaults saved, but VR defaults marker failed");
@@ -148,16 +178,15 @@ public final class QuestVrSettings {
                 getFloat(values, "hud_scale", 1.0f));
         final float screenScale = clampFinite(requestedScreenScale,
                 MIN_SCREEN_SCALE, MAX_SCREEN_SCALE, 1.0f);
-        // Before this explicit setting existed, the only user-facing "Immersive mode" switch was
-        // Android's display/chrome preference. Honor its enabled state as a one-way fallback for
-        // existing installs, while the new Quest-specific setting takes precedence as soon as it
-        // exists. The default shared-preference filename is defined by PreferenceManager as the
-        // package name plus "_preferences"; avoiding an androidx dependency keeps this module thin.
-        final boolean legacyAndroidImmersive = globalPreferences.getBoolean(
-                "displayImmersiveMode_v2", true);
+        // Fall back to the cinema screen, which is the mode that is actually finished. This used
+        // to read displayImmersiveMode_v2, but that preference hides Android's navigation bar and
+        // has nothing to do with VR presentation, and it defaults to true: an install that had
+        // never chosen a presentation mode therefore started in immersive projection, which still
+        // renders wider than the field the games submit geometry for. The XML default of
+        // cinema_screen could not correct it either, because these preferences live in their own
+        // file and that default is only ever written to the main one.
         final String preferencePresentation = preferences.getString("presentation_mode",
-                legacyAndroidImmersive ? PRESENTATION_IMMERSIVE_PROJECTION
-                        : PRESENTATION_CINEMA_SCREEN);
+                PRESENTATION_CINEMA_SCREEN);
         final String launchPresentation = context instanceof Activity
                 ? ((Activity) context).getIntent().getStringExtra(EXTRA_PRESENTATION_MODE) : null;
         final boolean launchPresentationValid =
@@ -189,9 +218,9 @@ public final class QuestVrSettings {
         final float sourceWidthMultiplier = clampFinite(requestedSourceWidthMultiplier,
                 0.5f, 2.0f, 2.0f);
         final int requestedMaxSourceWidth =
-                getInt(values, "max_stereo_source_width", SAFE_MAX_SOURCE_WIDTH);
+                getInt(values, "max_stereo_source_width", DEFAULT_MAX_SOURCE_WIDTH);
         final int maxSourceWidth = clamp(requestedMaxSourceWidth, 640,
-                SAFE_MAX_SOURCE_WIDTH);
+                MAX_SOURCE_WIDTH_OVERRIDE);
         QuestVrDiagnostics.info("QuestVrSettings", "Loaded preferences name=" +
                 PREFERENCES_NAME + " containsEnabled=" + preferences.contains("enabled") +
                 " rawEnabled=" + values.get("enabled") +
@@ -204,7 +233,6 @@ public final class QuestVrSettings {
                 " launchOverride=" + launchPresentationValid +
                 " preferencePresentation=" + preferencePresentation +
                 " explicitPresentation=" + preferences.contains("presentation_mode") +
-                " legacyAndroidImmersive=" + legacyAndroidImmersive +
                 " immersiveScale=" + requestedImmersiveScale + "->" + immersiveScale +
                 " sourceWidthMultiplierV2=" + requestedSourceWidthMultiplier + "->" +
                 sourceWidthMultiplier + " legacyWidthScale=" + legacySourceWidthScale +
@@ -240,7 +268,7 @@ public final class QuestVrSettings {
                 sourceWidthMultiplier,
                 maxSourceWidth,
                 preferences.getBoolean("touch_controller_enabled", true),
-                preferences.getBoolean("debug_logging", true),
+                preferences.getBoolean("debug_logging", false),
                 preferences.getBoolean("startup_proof_layers", false));
     }
 
@@ -302,13 +330,24 @@ public final class QuestVrSettings {
         final int requestedHeight = evenDimension(
                 safeBaseHeight * (double) configuration.stereoSourceWidthMultiplier * 0.5);
 
+        // Raising the width preference past the safe value lifts the height and pixel budgets
+        // with it. Lifting the width alone would leave the uniform downscale below pinned by
+        // whichever of the other two clamps first, so a taller preset would still collapse back
+        // to the plateau it is trying to escape.
+        final boolean overrideLimits =
+                configuration.maxStereoSourceWidth > SAFE_MAX_SOURCE_WIDTH;
+        final int maxSourceHeight =
+                overrideLimits ? MAX_SOURCE_HEIGHT_OVERRIDE : SAFE_MAX_SOURCE_HEIGHT;
+        final int maxSourcePixels =
+                overrideLimits ? MAX_SOURCE_PIXELS_OVERRIDE : SAFE_MAX_SOURCE_PIXELS;
+
         final double widthDownscale = Math.min(1.0,
                 configuration.maxStereoSourceWidth / (double) requestedWidth);
         final double heightDownscale = Math.min(1.0,
-                SAFE_MAX_SOURCE_HEIGHT / (double) requestedHeight);
+                maxSourceHeight / (double) requestedHeight);
         final double requestedPixels = (double) requestedWidth * requestedHeight;
-        final double pixelDownscale = requestedPixels > SAFE_MAX_SOURCE_PIXELS
-                ? Math.sqrt(SAFE_MAX_SOURCE_PIXELS / requestedPixels) : 1.0;
+        final double pixelDownscale = requestedPixels > maxSourcePixels
+                ? Math.sqrt(maxSourcePixels / requestedPixels) : 1.0;
         double downscale = Math.min(widthDownscale,
                 Math.min(heightDownscale, pixelDownscale));
         downscale = Math.max(0.0, Math.min(1.0, downscale));

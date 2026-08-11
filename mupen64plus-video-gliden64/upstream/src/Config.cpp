@@ -49,6 +49,7 @@ void Config::resetToDefaults()
 	generalEmulation.enableHWLighting = 0;
 	generalEmulation.enableCoverage = 0;
 	generalEmulation.enableClipping = 1;
+	generalEmulation.rejectionClipRatio = 0;
 	generalEmulation.enableCustomSettings = 1;
 	generalEmulation.enableShadersStorage = 1;
 	generalEmulation.enableLegacyBlending = 0;

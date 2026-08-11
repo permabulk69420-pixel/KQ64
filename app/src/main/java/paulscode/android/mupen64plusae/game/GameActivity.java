@@ -159,6 +159,24 @@ public class GameActivity extends AppCompatActivity implements PromptConfirmList
     private SensorController mSensorController;
     private long mLastTouchTime;
     private Handler mHandler;
+    private final Handler mKq64MenuHandler = new Handler(Looper.getMainLooper());
+    private boolean mKq64MenuHoldArmed;
+    private boolean mKq64MenuOpenedForHold;
+    private final Runnable mKq64OpenMenuRunnable = () -> {
+        if (!mKq64MenuHoldArmed || mKq64MenuOpenedForHold) {
+            return;
+        }
+
+        mKq64MenuOpenedForHold = true;
+        if (this.mCoreFragment != null) {
+            this.mCoreFragment.pauseEmulator();
+        }
+        mDrawerLayout.openDrawer(GravityCompat.START);
+        ReloadAllMenus();
+        mDrawerOpenState = true;
+        mGameSidebar.requestFocus();
+        mGameSidebar.smoothScrollToPosition(0);
+    };
 
     // args data
     private boolean mShouldExit = false;
@@ -631,16 +649,23 @@ public class GameActivity extends AppCompatActivity implements PromptConfirmList
                 " downscale=" + size.downscale + " clamped=" + size.clamped +
                 " limits width=" + size.widthLimited + " height=" + size.heightLimited +
                 " pixels=" + size.pixelLimited +
-                " userWidthCap=" + vr.maxStereoSourceWidth + " hardLimits=" +
+                " userWidthCap=" + vr.maxStereoSourceWidth + " safeLimits=" +
                 QuestVrSettings.SAFE_MAX_SOURCE_WIDTH + "x" +
                 QuestVrSettings.SAFE_MAX_SOURCE_HEIGHT + "/" +
-                QuestVrSettings.SAFE_MAX_SOURCE_PIXELS + "px");
+                QuestVrSettings.SAFE_MAX_SOURCE_PIXELS + "px overrideLimits=" +
+                QuestVrSettings.MAX_SOURCE_WIDTH_OVERRIDE + "x" +
+                QuestVrSettings.MAX_SOURCE_HEIGHT_OVERRIDE + "/" +
+                QuestVrSettings.MAX_SOURCE_PIXELS_OVERRIDE + "px");
         if (size.widthLimited) {
             QuestVrDiagnostics.warn(TAG, "Quest VR resolution plateau reached: this and " +
                     "larger presets with the same content aspect resolve to effectiveTotal=" +
                     size.actualWidth + "x" + size.actualHeight + " effectivePerEye=" +
                     size.actualPerEyeWidth + "x" + size.actualHeight +
-                    " at the current source-width cap");
+                    " at the current source-width cap of " + vr.maxStereoSourceWidth +
+                    "; raise max_stereo_source_width above " +
+                    QuestVrSettings.SAFE_MAX_SOURCE_WIDTH + " (up to " +
+                    QuestVrSettings.MAX_SOURCE_WIDTH_OVERRIDE +
+                    ") to lift this preset off the plateau");
         }
         return new int[] {size.actualWidth, size.actualHeight};
     }
@@ -1186,6 +1211,18 @@ public class GameActivity extends AppCompatActivity implements PromptConfirmList
         if (keyDown && keyCode == KeyEvent.KEYCODE_F12) {
             mGameSurface.recenterQuestVr();
             return true;
+        }
+
+        if (keyCode == KeyEvent.KEYCODE_BUTTON_X) {
+            if (keyDown && event.getRepeatCount() == 0) {
+                mKq64MenuHoldArmed = true;
+                mKq64MenuOpenedForHold = false;
+                mKq64MenuHandler.removeCallbacks(mKq64OpenMenuRunnable);
+                mKq64MenuHandler.postDelayed(mKq64OpenMenuRunnable, 3000L);
+            } else if (event.getAction() == KeyEvent.ACTION_UP) {
+                mKq64MenuHoldArmed = false;
+                mKq64MenuHandler.removeCallbacks(mKq64OpenMenuRunnable);
+            }
         }
 
         boolean handled = false;
