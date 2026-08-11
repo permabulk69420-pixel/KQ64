@@ -52,3 +52,6 @@ crashreport.txt
 
 # Transifex client
 tx.exe
+
+# Quest VR diagnostic captures
+quest-vr-diagnostic-*.log

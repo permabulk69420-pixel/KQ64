@@ -67,8 +67,27 @@ The PPSSPP comparison and current proof sequence are documented in
 [`PPSSPP_OPENXR_AUDIT.md`](PPSSPP_OPENXR_AUDIT.md). The audit build first submits a bright green
 head-locked quad, then red/blue projection views, then the emulator source when new SurfaceTexture
 frames are proven. Each interval counts only while the session is VISIBLE/FOCUSED, and source-shader
-failure can no longer prevent the diagnostic layers. This build still needs a Quest 3 retest. Treat
-it as an instrumented prototype rather than a release.
+failure can no longer prevent the diagnostic layers.
+
+## Presentation modes
+
+Cinema screen is the polished mode and the one to judge the build by. Immersive projection renders
+at the headset's field of view, which is wider than the frustum the games actually submit geometry
+for, so the scene still ends in a hard edge where the original frustum stopped. That gap is known
+and unfixed; closing it needs the expanded CPU clipping described above to cover the full eye
+field, not just the packed source.
+
+Presentation mode reaches the renderer for three things, and cinema turns all of them off, because
+a panel fixed in the room is not a head-mounted camera: head rotation, head translation, and the
+OpenXR field-of-view replacement. Per-eye offsets stay on, so cinema keeps its stereo depth.
+
+## Resolution
+
+A Quest install defaults to 1920x1440 per eye, from a 3840x1440 side-by-side producer. Both halves
+of that have to move together: the render-resolution preset sets the per-eye size and
+`max_stereo_source_width` clamps it, so raising either alone does nothing. Lower the width cap
+first if a headset ever shows a black or missing image, since an oversized producer can fail
+without reporting an error.
 
 ## Existing renderer architecture
 

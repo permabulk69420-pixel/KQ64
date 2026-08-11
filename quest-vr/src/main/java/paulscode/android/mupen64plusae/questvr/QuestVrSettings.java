@@ -265,7 +265,7 @@ public final class QuestVrSettings {
                 sourceWidthMultiplier,
                 maxSourceWidth,
                 preferences.getBoolean("touch_controller_enabled", true),
-                preferences.getBoolean("debug_logging", true),
+                preferences.getBoolean("debug_logging", false),
                 preferences.getBoolean("startup_proof_layers", false));
     }
 

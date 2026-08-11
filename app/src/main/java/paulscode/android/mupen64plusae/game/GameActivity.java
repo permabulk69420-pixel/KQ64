@@ -159,6 +159,24 @@ public class GameActivity extends AppCompatActivity implements PromptConfirmList
     private SensorController mSensorController;
     private long mLastTouchTime;
     private Handler mHandler;
+    private final Handler mKq64MenuHandler = new Handler(Looper.getMainLooper());
+    private boolean mKq64MenuHoldArmed;
+    private boolean mKq64MenuOpenedForHold;
+    private final Runnable mKq64OpenMenuRunnable = () -> {
+        if (!mKq64MenuHoldArmed || mKq64MenuOpenedForHold) {
+            return;
+        }
+
+        mKq64MenuOpenedForHold = true;
+        if (this.mCoreFragment != null) {
+            this.mCoreFragment.pauseEmulator();
+        }
+        mDrawerLayout.openDrawer(GravityCompat.START);
+        ReloadAllMenus();
+        mDrawerOpenState = true;
+        mGameSidebar.requestFocus();
+        mGameSidebar.smoothScrollToPosition(0);
+    };
 
     // args data
     private boolean mShouldExit = false;
@@ -1193,6 +1211,18 @@ public class GameActivity extends AppCompatActivity implements PromptConfirmList
         if (keyDown && keyCode == KeyEvent.KEYCODE_F12) {
             mGameSurface.recenterQuestVr();
             return true;
+        }
+
+        if (keyCode == KeyEvent.KEYCODE_BUTTON_X) {
+            if (keyDown && event.getRepeatCount() == 0) {
+                mKq64MenuHoldArmed = true;
+                mKq64MenuOpenedForHold = false;
+                mKq64MenuHandler.removeCallbacks(mKq64OpenMenuRunnable);
+                mKq64MenuHandler.postDelayed(mKq64OpenMenuRunnable, 3000L);
+            } else if (event.getAction() == KeyEvent.ACTION_UP) {
+                mKq64MenuHoldArmed = false;
+                mKq64MenuHandler.removeCallbacks(mKq64OpenMenuRunnable);
+            }
         }
 
         boolean handled = false;

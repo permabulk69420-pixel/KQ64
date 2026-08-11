@@ -142,7 +142,7 @@
             android:summary="@string/questVrTouch_summary"
             android:title="@string/questVrTouch_title" />
         <androidx.preference.CheckBoxPreference
-            android:defaultValue="true"
+            android:defaultValue="false"
             android:key="debug_logging"
             android:summary="@string/questVrDebug_summary"
             android:title="@string/questVrDebug_title" />

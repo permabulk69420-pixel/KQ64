@@ -68,6 +68,7 @@ public final class QuestVrLauncherActivity extends AppCompatActivity
     private static final int ACTION_LAUNCH = 0;
     private static final int ACTION_IMPORT = 1;
     private static final int ACTION_ADVANCED = 2;
+    private static final int ACTION_CONTROLS = 3;
     private static final int MAX_ARTWORK_CACHE = 8;
     private static final long AXIS_REPEAT_INTERVAL_MS = 220L;
     private static final float AXIS_NAVIGATION_THRESHOLD = 0.62f;
@@ -285,7 +286,7 @@ public final class QuestVrLauncherActivity extends AppCompatActivity
                     } else if (mFocusRow == ROW_MODE) {
                         mSelectedMode = wrap(mSelectedMode + direction, 2);
                     } else if (mFocusRow == ROW_ACTIONS) {
-                        mSelectedAction = wrap(mSelectedAction + direction, 3);
+                        mSelectedAction = wrap(mSelectedAction + direction, 4);
                     }
                 }
                 if ((input & QuestVrBridge.MENU_INPUT_SELECT) != 0) {
@@ -354,9 +355,18 @@ public final class QuestVrLauncherActivity extends AppCompatActivity
                 } else if (x >= 630.0f && x < 970.0f) {
                     mSelectedAction = ACTION_IMPORT;
                     action = ACTION_IMPORT;
-                } else if (x >= 970.0f && x <= 1315.0f) {
+                } else if (x >= 120.0f && x <= 445.0f) {
+                    mSelectedAction = ACTION_LAUNCH;
+                    action = ACTION_LAUNCH;
+                } else if (x >= 470.0f && x <= 795.0f) {
+                    mSelectedAction = ACTION_IMPORT;
+                    action = ACTION_IMPORT;
+                } else if (x >= 820.0f && x <= 1145.0f) {
                     mSelectedAction = ACTION_ADVANCED;
                     action = ACTION_ADVANCED;
+                } else if (x >= 1170.0f && x <= 1495.0f) {
+                    mSelectedAction = ACTION_CONTROLS;
+                    action = ACTION_CONTROLS;
                 }
             }
         }
@@ -396,6 +406,8 @@ public final class QuestVrLauncherActivity extends AppCompatActivity
             startActivity(new Intent(this, GalleryActivity.class));
             finish();
             overridePendingTransition(0, 0);
+        } else if (action == ACTION_CONTROLS) {
+            Kq64ControllerMapping.show(this);
         }
     }
 
@@ -746,12 +758,14 @@ public final class QuestVrLauncherActivity extends AppCompatActivity
     private void drawActionRow(Canvas canvas, Paint paint, int action, boolean focused,
             boolean empty, boolean scanning) {
         final String launch = empty ? "IMPORT TO BEGIN" : "LAUNCH";
-        drawButton(canvas, paint, new RectF(305, 710, 615, 790), launch,
+        drawButton(canvas, paint, new RectF(120, 710, 445, 790), launch,
                 action == ACTION_LAUNCH, focused, !scanning);
-        drawButton(canvas, paint, new RectF(645, 710, 955, 790), "IMPORT GAMES",
+        drawButton(canvas, paint, new RectF(470, 710, 795, 790), "IMPORT GAMES",
                 action == ACTION_IMPORT, focused, !scanning);
-        drawButton(canvas, paint, new RectF(985, 710, 1295, 790), "ADVANCED / LEGACY",
+        drawButton(canvas, paint, new RectF(820, 710, 1145, 790), "ADVANCED / LEGACY",
                 action == ACTION_ADVANCED, focused, !scanning);
+        drawButton(canvas, paint, new RectF(1170, 710, 1495, 790), "CONTROLS",
+                action == ACTION_CONTROLS, focused, !scanning);
     }
 
     private void drawChoice(Canvas canvas, Paint paint, RectF rect, String title,
