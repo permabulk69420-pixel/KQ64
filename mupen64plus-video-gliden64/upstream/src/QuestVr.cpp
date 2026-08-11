@@ -268,6 +268,20 @@ Quaternion conjugate(const Quaternion& q)
 	return {-q.x, -q.y, -q.z, q.w};
 }
 
+// Keep only the rotation about the up axis. A recentre reference must not capture pitch or
+// roll: gravity is absolute, so if the reference keeps whatever tilt the player happened to
+// hold when they recentred, the game horizon stops matching the real one. The player then
+// tilts to compensate for the rest of the session, which quietly aims the camera at parts of
+// the scene the game never draws. OpenXR runtimes recentre yaw only for the same reason.
+Quaternion yawOnly(const Quaternion& q)
+{
+	// OpenXR is Y-up.
+	const float yaw = std::atan2(2.0f * (q.w * q.y + q.x * q.z),
+		1.0f - 2.0f * (q.y * q.y + q.z * q.z));
+	const float half = yaw * 0.5f;
+	return {0.0f, std::sin(half), 0.0f, std::cos(half)};
+}
+
 Quaternion multiply(const Quaternion& a, const Quaternion& b)
 {
 	return {
@@ -1531,7 +1545,7 @@ extern "C" QUEST_VR_EXPORT void M64PQuestVrSetPose(float qx, float qy, float qz,
 	const Vector3 position{px, py, pz};
 	if (s_recenterRequested.exchange(false, std::memory_order_acq_rel) ||
 		!s_haveRecenterPose.load(std::memory_order_acquire)) {
-		storePose(s_recenterPose, orientation, position);
+		storePose(s_recenterPose, yawOnly(orientation), position);
 		s_haveRecenterPose.store(true, std::memory_order_release);
 	}
 	storePose(s_pose, orientation, position);
