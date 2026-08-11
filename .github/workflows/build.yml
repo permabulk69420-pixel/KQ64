@@ -114,55 +114,55 @@ jobs:
           game = game_path.read_text(encoding="utf-8")
           field_anchor = '    private Handler mHandler;\n'
           field_replacement = '''    private Handler mHandler;
-    private final Handler mKq64MenuHandler = new Handler(Looper.getMainLooper());
-    private boolean mKq64MenuHoldArmed;
-    private boolean mKq64MenuOpenedForHold;
-    private final Runnable mKq64OpenMenuRunnable = () -> {
-        if (!mKq64MenuHoldArmed || mKq64MenuOpenedForHold) {
-            return;
-        }
-
-        mKq64MenuOpenedForHold = true;
-        if (mCoreFragment != null) {
-            mCoreFragment.pauseEmulator();
-        }
-        mDrawerLayout.openDrawer(GravityCompat.START);
-        ReloadAllMenus();
-        mDrawerOpenState = true;
-        mGameSidebar.requestFocus();
-        mGameSidebar.smoothScrollToPosition(0);
-    };
-'''
+              private final Handler mKq64MenuHandler = new Handler(Looper.getMainLooper());
+              private boolean mKq64MenuHoldArmed;
+              private boolean mKq64MenuOpenedForHold;
+              private final Runnable mKq64OpenMenuRunnable = () -> {
+                  if (!mKq64MenuHoldArmed || mKq64MenuOpenedForHold) {
+                      return;
+                  }
+          
+                  mKq64MenuOpenedForHold = true;
+                  if (mCoreFragment != null) {
+                      mCoreFragment.pauseEmulator();
+                  }
+                  mDrawerLayout.openDrawer(GravityCompat.START);
+                  ReloadAllMenus();
+                  mDrawerOpenState = true;
+                  mGameSidebar.requestFocus();
+                  mGameSidebar.smoothScrollToPosition(0);
+              };
+          '''
           if field_anchor not in game:
               raise SystemExit("GameActivity handler field anchor not found")
           game = game.replace(field_anchor, field_replacement, 1)
 
           key_anchor = '''        if (keyDown && keyCode == KeyEvent.KEYCODE_F12) {
-            mGameSurface.recenterQuestVr();
-            return true;
-        }
-
-        boolean handled = false;
-'''
+                      mGameSurface.recenterQuestVr();
+                      return true;
+                  }
+          
+                  boolean handled = false;
+          '''
           key_replacement = '''        if (keyDown && keyCode == KeyEvent.KEYCODE_F12) {
-            mGameSurface.recenterQuestVr();
-            return true;
-        }
-
-        if (keyCode == KeyEvent.KEYCODE_BUTTON_X) {
-            if (keyDown && event.getRepeatCount() == 0) {
-                mKq64MenuHoldArmed = true;
-                mKq64MenuOpenedForHold = false;
-                mKq64MenuHandler.removeCallbacks(mKq64OpenMenuRunnable);
-                mKq64MenuHandler.postDelayed(mKq64OpenMenuRunnable, 3000L);
-            } else if (event.getAction() == KeyEvent.ACTION_UP) {
-                mKq64MenuHoldArmed = false;
-                mKq64MenuHandler.removeCallbacks(mKq64OpenMenuRunnable);
-            }
-        }
-
-        boolean handled = false;
-'''
+                      mGameSurface.recenterQuestVr();
+                      return true;
+                  }
+          
+                  if (keyCode == KeyEvent.KEYCODE_BUTTON_X) {
+                      if (keyDown && event.getRepeatCount() == 0) {
+                          mKq64MenuHoldArmed = true;
+                          mKq64MenuOpenedForHold = false;
+                          mKq64MenuHandler.removeCallbacks(mKq64OpenMenuRunnable);
+                          mKq64MenuHandler.postDelayed(mKq64OpenMenuRunnable, 3000L);
+                      } else if (event.getAction() == KeyEvent.ACTION_UP) {
+                          mKq64MenuHoldArmed = false;
+                          mKq64MenuHandler.removeCallbacks(mKq64OpenMenuRunnable);
+                      }
+                  }
+          
+                  boolean handled = false;
+          '''
           if key_anchor not in game:
               raise SystemExit("GameActivity key hook anchor not found")
           game = game.replace(key_anchor, key_replacement, 1)
