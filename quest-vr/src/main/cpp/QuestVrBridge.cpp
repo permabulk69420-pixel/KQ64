@@ -554,6 +554,18 @@ XrQuaternionf normalizeQuaternion(XrQuaternionf quaternion) {
     return quaternion;
 }
 
+// Rotation about the up axis only. A cinema screen hangs in the room, so it should be upright
+// and level however the player's head happened to be tilted when it was anchored: keeping pitch
+// leans the panel and plants it above or below eye height, and keeping roll tips the picture in
+// the frame. OpenXR is Y-up.
+XrQuaternionf yawOnlyQuaternion(const XrQuaternionf& rawQuaternion) {
+    const XrQuaternionf q = normalizeQuaternion(rawQuaternion);
+    const float yaw = std::atan2(2.0f * (q.w * q.y + q.x * q.z),
+        1.0f - 2.0f * (q.y * q.y + q.z * q.z));
+    const float half = yaw * 0.5f;
+    return {0.0f, std::sin(half), 0.0f, std::cos(half)};
+}
+
 XrVector3f rotateVector(const XrQuaternionf& rawQuaternion, const XrVector3f& vector) {
     const XrQuaternionf quaternion = normalizeQuaternion(rawQuaternion);
     const XrVector3f uv{
@@ -584,7 +596,10 @@ void anchorScreenToCurrentView(uint32_t viewCount) {
         center.y = (leftPose.position.y + g.views[1].pose.position.y) * 0.5f;
         center.z = (leftPose.position.z + g.views[1].pose.position.z) * 0.5f;
     }
-    const XrQuaternionf orientation = normalizeQuaternion(leftPose.orientation);
+    // Yaw only, so the panel hangs upright and level and the offset that places it stays
+    // horizontal: the screen lands directly ahead at the height of the head rather than
+    // wherever the head happened to be pointing.
+    const XrQuaternionf orientation = yawOnlyQuaternion(leftPose.orientation);
     const XrVector3f offset = rotateVector(orientation,
         {0.0f, 0.0f, -g.configurationScreenDistanceMeters});
     g.screenPose.orientation = orientation;
