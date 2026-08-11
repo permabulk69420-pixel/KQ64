@@ -1603,21 +1603,30 @@ bool renderEye(uint32_t eye, uint32_t imageIndex, RenderContent content,
                                g.sourceTransform.data());
 
             if (presentationMode == PresentationMode::ImmersiveProjection) {
-                // The emulator's per-eye content is normally 4:3 while Quest's eye swapchain is
-                // close to square. Aspect-fit into the projection image so the full useful source
-                // remains visible instead of being stretched or cropped to the complete eye.
+                // Only aspect-fit a source that is a 4:3 picture. When the OpenXR FOV path is
+                // active GLideN64 has already replaced the game's angular terms with this eye's
+                // full runtime FOV, so NDC -1..1 in the source means the FOV edges, not the
+                // edges of a 4:3 image. Fitting it then maps the full vertical FOV onto
+                // targetAspect/sourceAspect of the eye while the layer still submits the full
+                // FOV, and the world is compressed vertically by exactly that ratio: the
+                // checked-in Quest 3S log shows effectiveNdcScale=1.0000x0.7159, a 28% vertical
+                // squash. Stretching to the complete eye is the correct presentation for a
+                // full-FOV render; the non-square source pixels are simply resampled.
                 const float sourceAspect = std::clamp(g.sourceContentAspect, 0.5f, 3.0f);
-                if (sourceAspect > targetAspect) {
-                    scaleY = targetAspect / sourceAspect;
-                } else if (sourceAspect < targetAspect) {
-                    scaleX = sourceAspect / targetAspect;
+                if (!g.configurationUseOpenXrFov) {
+                    if (sourceAspect > targetAspect) {
+                        scaleY = targetAspect / sourceAspect;
+                    } else if (sourceAspect < targetAspect) {
+                        scaleX = sourceAspect / targetAspect;
+                    }
                 }
                 scaleX *= g.configurationImmersiveViewScale;
                 scaleY *= g.configurationImmersiveViewScale;
                 if (!g.immersiveScaleLogged) {
-                    LOGI("Immersive aspect fit sourceAspect=%.4f targetAspect=%.4f "
+                    LOGI("Immersive aspect fit openXrFov=%d sourceAspect=%.4f targetAspect=%.4f "
                          "userScale=%.3f effectiveNdcScale=%.4fx%.4f sourcePerEye=%dx%d "
                          "consumerEye=%dx%d",
+                         g.configurationUseOpenXrFov ? 1 : 0,
                          sourceAspect, targetAspect, g.configurationImmersiveViewScale,
                          scaleX, scaleY,
                          g.stereoSourceActive ? g.sourceWidth / 2 : g.sourceWidth,
