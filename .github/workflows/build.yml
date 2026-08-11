@@ -123,8 +123,8 @@ jobs:
                   }
           
                   mKq64MenuOpenedForHold = true;
-                  if (mCoreFragment != null) {
-                      mCoreFragment.pauseEmulator();
+                  if (this.mCoreFragment != null) {
+                      this.mCoreFragment.pauseEmulator();
                   }
                   mDrawerLayout.openDrawer(GravityCompat.START);
                   ReloadAllMenus();
